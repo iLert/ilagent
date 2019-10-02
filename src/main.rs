@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::thread;
 use log::info;
 use std::time::Duration;
