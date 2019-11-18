@@ -4,11 +4,11 @@ use std::thread;
 use log::info;
 use std::time::Duration;
 
-mod server;
-use server::run_server;
+mod ilqueue;
+use ilqueue::ILQueue;
 
-mod queue;
-use queue::Queue;
+mod ilserver;
+use ilserver::run_server;
 
 fn main() -> () {
     env_logger::init();
@@ -26,7 +26,7 @@ fn main() -> () {
     });
 
     let db_test = thread::spawn(move || {
-        let queue = Queue::new("./ilagent.db3");
+        let queue = ILQueue::new("./ilagent.db3");
         queue.prepare_database();
     });
 

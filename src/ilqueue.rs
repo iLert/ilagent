@@ -1,30 +1,31 @@
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, NO_PARAMS};
-use time::Timespec;
 use log::{info, error};
+use serde_derive::{Deserialize, Serialize};
+use chrono::prelude::*;
 
 const EVENT_TYPE_ALERT: &str = "ALERT";
 const CURRENT_VERSION: i32 = 1;
 const VERSION_KEY: &str = "version";
 
 #[derive(Debug)]
-pub struct ILAgentItem {
+struct ILAgentItem {
     key: String,
     val: String,
-    created_at: Timespec,
+    created_at: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct IncidentQueueItem {
-    id: i32,
-    api_key: String,
-    event_type: String,
-    incident_key: Option<String>,
-    summary: String,
-    created_at: Timespec,
+    pub id: i32,
+    pub api_key: String,
+    pub event_type: String,
+    pub incident_key: Option<String>,
+    pub summary: String,
+    pub created_at: Option<String>,
 }
 
-pub struct Queue {
+pub struct ILQueue {
     conn: Connection,
 }
 
@@ -41,12 +42,12 @@ curl -X POST \
 }'
 */
 
-impl Queue {
+impl ILQueue {
 
-    pub fn new(path: &str) -> Queue {
+    pub fn new(path: &str) -> ILQueue {
         info!("SQLite Version: {}", rusqlite::version());
         let conn = Connection::open(path).unwrap();
-        Queue { conn }
+        ILQueue { conn }
     }
 
     pub fn prepare_database(&self) -> () {
@@ -61,24 +62,15 @@ impl Queue {
             NO_PARAMS,
         ).unwrap();
 
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS incident_items (
-                  id                 INTEGER PRIMARY KEY,
-                  api_key            TEXT NOT NULL,
-                  event_type         TEXT NOT NULL,
-                  incident_key       TEXT NOT NULL,
-                  summary            TEXT NOT NULL,
-                  created_at         TEXT NOT NULL
-                  )",
-            NO_PARAMS,
-        ).unwrap();
-
         let version = self.get_ilagent_value_as_number(VERSION_KEY);
         match version {
             None => {
                 info!("Database not bootstrapped yet.");
-                // TODO: boostrap
-                let result = self.create_ilagent_item(self.create_ilagent_item_instance(VERSION_KEY,CURRENT_VERSION.to_string().as_str()));
+
+                self.__migrate_to_version_1();
+
+                let result = self.create_ilagent_item(
+            self.create_ilagent_item_instance(VERSION_KEY,CURRENT_VERSION.to_string().as_str()));
                 match result {
                     Err(e) => panic!("Failed to bootstrap database: {:?}.", e),
                     Ok(result_val) => info!("Bootstrapped database {}.", result_val),
@@ -86,7 +78,7 @@ impl Queue {
             },
             Some(version_val) => {
                 info!("Database on version {}.", version_val);
-                // TODO: validate if version needs upgrade
+                // TODO: validate if version needs upgrade and run migrations
             },
         };
 
@@ -133,7 +125,7 @@ impl Queue {
         let incident = ILAgentItem {
             key: key.to_string(),
             val: val.to_string(),
-            created_at: time::get_time(),
+            created_at: Some(Utc::now().to_string()),
         };
 
         incident
@@ -147,6 +139,22 @@ impl Queue {
         )
     }
 
+    fn __migrate_to_version_1(&self) -> Result<usize,  rusqlite::Error> {
+        info!("Running migration to version 1.");
+
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS incident_items (
+                  id                 INTEGER PRIMARY KEY,
+                  api_key            TEXT NOT NULL,
+                  event_type         TEXT NOT NULL,
+                  incident_key       TEXT NOT NULL,
+                  summary            TEXT NOT NULL,
+                  created_at         TEXT NOT NULL
+                  )",
+            NO_PARAMS,
+        )
+    }
+
     pub fn create_incident_instance(&self, api_key: &str, summary: &str) -> IncidentQueueItem {
 
         let incident = IncidentQueueItem {
@@ -155,7 +163,7 @@ impl Queue {
             event_type: EVENT_TYPE_ALERT.to_string(),
             incident_key: None,
             summary: summary.to_string(),
-            created_at: time::get_time(),
+            created_at: Some(Utc::now().to_string()),
         };
 
         incident
