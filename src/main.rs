@@ -1,11 +1,12 @@
 #![allow(dead_code)]
 
-use std::thread;
 use log::info;
-use std::time::Duration;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+mod ilconfig;
+use ilconfig::ILConfig;
 
 mod ilqueue;
 use ilqueue::ILQueue;
@@ -13,8 +14,13 @@ use ilqueue::ILQueue;
 mod ilserver;
 use ilserver::run_server;
 
+mod ilpoll;
+use ilpoll::run_poll_job;
+
 fn main() -> () {
     env_logger::init();
+
+    let config = ILConfig::new();
 
     let are_we_running = Arc::new(AtomicBool::new(true));
     let are_we_running_a = are_we_running.clone();
@@ -23,27 +29,17 @@ fn main() -> () {
         are_we_running_a.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
-    info!("Starting server..");
-    let queue_web_instance = ILQueue::new("./ilagent.db3");
+    info!("Starting..");
+    let queue_web_instance = ILQueue::new(config.db_file.as_str());
+    info!("Migrating DB..");
     queue_web_instance.prepare_database();
 
-    let are_we_running_b = are_we_running.clone();
-    let poll_thread = thread::spawn(move || {
-        let queue = ILQueue::new("./ilagent.db3");
-        loop {
-            thread::sleep(Duration::new(3, 0));
-            if !are_we_running_b.load(Ordering::SeqCst) {
-                break;
-            }
+    info!("Starting poll job..");
+    let poll_job = run_poll_job(config.clone(), are_we_running);
 
-            let incidents = queue.get_incidents(50);
-            info!("Found incidents: {}.", incidents.len());
-        }
-    });
+    info!("Starting server..");
+    run_server(queue_web_instance, config.get_http_bind_str().as_str()).unwrap();
 
-    let http_bind_str = format!("0.0.0.0:{}", 8977);
-    run_server(queue_web_instance, http_bind_str).unwrap();
-
-    poll_thread.join().unwrap();
+    poll_job.join().unwrap();
     ()
 }

@@ -132,10 +132,12 @@ impl ILQueue {
     }
 
     fn create_ilagent_item(&self, item: ILAgentItem) -> Result<usize,  rusqlite::Error> {
+        let default_created = Utc::now().to_string();
+        let created_at = item.created_at.as_ref().unwrap_or(&default_created);
         self.conn.execute(
             "INSERT INTO ilagent (key, val, created_at)
                           VALUES (?1, ?2, ?3)",
-            &[&item.key as &dyn ToSql, &item.val, &item.created_at],
+            &[&item.key as &dyn ToSql, &item.val, created_at],
         )
     }
 
