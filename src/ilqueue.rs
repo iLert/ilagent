@@ -15,7 +15,7 @@ struct ILAgentItem {
     created_at: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IncidentQueueItem {
     pub id: i32,
     pub api_key: String,
@@ -67,7 +67,7 @@ impl ILQueue {
             None => {
                 info!("Database not bootstrapped yet.");
 
-                self.__migrate_to_version_1();
+                self.__migrate_to_version_1().unwrap();
 
                 let result = self.create_ilagent_item(
             self.create_ilagent_item_instance(VERSION_KEY,CURRENT_VERSION.to_string().as_str()));
@@ -185,12 +185,14 @@ impl ILQueue {
         items.collect::<Vec<Result<IncidentQueueItem,  rusqlite::Error>>>()
     }
 
-    pub fn create_incident(&self, incident: IncidentQueueItem) -> Result<usize,  rusqlite::Error> {
+    pub fn create_incident(&self, incident: &IncidentQueueItem) -> Result<usize,  rusqlite::Error> {
+        let default_created = Utc::now().to_string();
+        let created_at = incident.created_at.as_ref().unwrap_or(&default_created);
          self.conn.execute(
             "INSERT INTO incident_items (api_key, event_type, incident_key, summary, created_at)
                   VALUES (?1, ?2, ?3, ?4, ?5)",
             &[&incident.api_key as &dyn ToSql, &incident.event_type, &incident.incident_key,
-                &incident.summary, &incident.created_at],
+                &incident.summary, created_at],
         )
     }
 

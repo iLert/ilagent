@@ -4,6 +4,9 @@ use std::thread;
 use log::info;
 use std::time::Duration;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 mod ilqueue;
 use ilqueue::ILQueue;
 
@@ -13,29 +16,34 @@ use ilserver::run_server;
 fn main() -> () {
     env_logger::init();
 
+    let are_we_running = Arc::new(AtomicBool::new(true));
+    let are_we_running_a = are_we_running.clone();
+    ctrlc::set_handler(move || {
+        info!("Received Ctrl+C.");
+        are_we_running_a.store(false, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    info!("Starting server..");
+    let queue_web_instance = ILQueue::new("./ilagent.db3");
+    queue_web_instance.prepare_database();
+
+    let are_we_running_b = are_we_running.clone();
     let poll_thread = thread::spawn(move || {
-        let mut round = 0;
+        let queue = ILQueue::new("./ilagent.db3");
         loop {
-            round = round + 1;
-            if round > 3 {
+            thread::sleep(Duration::new(3, 0));
+            if !are_we_running_b.load(Ordering::SeqCst) {
                 break;
             }
-            info!("Test: {}", round);
-            thread::sleep(Duration::new(3, 0));
+
+            let incidents = queue.get_incidents(50);
+            info!("Found incidents: {}.", incidents.len());
         }
     });
 
-    let db_test = thread::spawn(move || {
-        let queue = ILQueue::new("./ilagent.db3");
-        queue.prepare_database();
-    });
-
-    info!("Starting server..");
     let http_bind_str = format!("0.0.0.0:{}", 8977);
-    run_server(http_bind_str).unwrap();
+    run_server(queue_web_instance, http_bind_str).unwrap();
 
     poll_thread.join().unwrap();
-    db_test.join().unwrap();
-
     ()
 }
