@@ -20,8 +20,8 @@ pub fn run_poll_job(config: ILConfig, are_we_running: Arc<AtomicBool>) -> JoinHa
                 break;
             }
 
-            let incidents = queue.get_incidents(50);
-            info!("Found incidents: {}.", incidents.len());
+            let items = queue.get_events(50);
+            info!("Found {} queued items.", items.len());
         }
     });
 

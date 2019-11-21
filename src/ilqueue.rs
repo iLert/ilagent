@@ -16,7 +16,7 @@ struct ILAgentItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct IncidentQueueItem {
+pub struct EventQueueItem {
     pub id: i32,
     pub api_key: String,
     pub event_type: String,
@@ -122,13 +122,13 @@ impl ILQueue {
 
     fn create_ilagent_item_instance(&self, key: &str, val: &str) -> ILAgentItem {
 
-        let incident = ILAgentItem {
+        let item = ILAgentItem {
             key: key.to_string(),
             val: val.to_string(),
             created_at: Some(Utc::now().to_string()),
         };
 
-        incident
+        item
     }
 
     fn create_ilagent_item(&self, item: ILAgentItem) -> Result<usize,  rusqlite::Error> {
@@ -145,7 +145,7 @@ impl ILQueue {
         info!("Running migration to version 1.");
 
         self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS incident_items (
+            "CREATE TABLE IF NOT EXISTS event_items (
                   id                 INTEGER PRIMARY KEY,
                   api_key            TEXT NOT NULL,
                   event_type         TEXT NOT NULL,
@@ -157,9 +157,9 @@ impl ILQueue {
         )
     }
 
-    pub fn create_incident_instance(&self, api_key: &str, summary: &str) -> IncidentQueueItem {
+    pub fn create_event_instance(&self, api_key: &str, summary: &str) -> EventQueueItem {
 
-        let incident = IncidentQueueItem {
+        let item = EventQueueItem {
             id: 0,
             api_key: api_key.to_string(),
             event_type: EVENT_TYPE_ALERT.to_string(),
@@ -168,40 +168,46 @@ impl ILQueue {
             created_at: Some(Utc::now().to_string()),
         };
 
-        incident
+        item
     }
 
-    pub fn get_incidents(&self, limit: i32) -> Vec<Result<IncidentQueueItem,  rusqlite::Error>> {
+    pub fn get_events(&self, limit: i32) -> Vec<Result<EventQueueItem,  rusqlite::Error>> {
 
-        let mut stmt = self.conn.prepare("SELECT id, api_key, event_type, incident_key, summary, created_at FROM incident_items LIMIT ?1").unwrap();
-        let items = stmt
-            .query_map(&[&limit], |row| Ok(IncidentQueueItem {
+        let mut stmt = self.conn.prepare("SELECT id, api_key, event_type, incident_key, summary, created_at FROM event_items LIMIT ?1").unwrap();
+        let query_result = stmt
+            .query_map(&[&limit], |row| Ok(EventQueueItem {
                 id: row.get(0).unwrap(),
                 api_key: row.get(1).unwrap(),
                 event_type: row.get(2).unwrap(),
                 incident_key: row.get(3).unwrap(),
                 summary: row.get(4).unwrap(),
                 created_at: row.get(5).unwrap(),
-            })).unwrap();
+            }));
 
-        items.collect::<Vec<Result<IncidentQueueItem,  rusqlite::Error>>>()
+        match query_result {
+            Ok(items) => items.collect::<Vec<Result<EventQueueItem,  rusqlite::Error>>>(),
+            Err(error) => {
+                error!("Failed to fetch events {:?}.", error);
+                Vec::new()
+            }
+        }
     }
 
-    pub fn create_incident(&self, incident: &IncidentQueueItem) -> Result<usize,  rusqlite::Error> {
+    pub fn create_event(&self, item: &EventQueueItem) -> Result<usize,  rusqlite::Error> {
         let default_created = Utc::now().to_string();
-        let created_at = incident.created_at.as_ref().unwrap_or(&default_created);
+        let created_at = item.created_at.as_ref().unwrap_or(&default_created);
          self.conn.execute(
-            "INSERT INTO incident_items (api_key, event_type, incident_key, summary, created_at)
+            "INSERT INTO event_items (api_key, event_type, incident_key, summary, created_at)
                   VALUES (?1, ?2, ?3, ?4, ?5)",
-            &[&incident.api_key as &dyn ToSql, &incident.event_type, &incident.incident_key,
-                &incident.summary, created_at],
+            &[&item.api_key as &dyn ToSql, &item.event_type, &item.incident_key,
+                &item.summary, created_at],
         )
     }
 
-    pub fn delete_incident(&self, incident: IncidentQueueItem) -> Result<usize,  rusqlite::Error> {
+    pub fn delete_event(&self, item: EventQueueItem) -> Result<usize,  rusqlite::Error> {
         self.conn.execute(
-            "DELETE FROM incident_items WHERE id = ?1",
-            &[&incident.id],
+            "DELETE FROM event_items WHERE id = ?1",
+            &[&item.id],
         )
     }
 }

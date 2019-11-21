@@ -3,7 +3,7 @@ use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use log::{info, error};
 use std::sync::Mutex;
 
-use crate::ilqueue::{ILQueue, IncidentQueueItem};
+use crate::ilqueue::{ILQueue, EventQueueItem};
 
 struct WebContextContainer {
     queue: ILQueue,
@@ -23,7 +23,7 @@ fn get_index_param(_req: HttpRequest, path: web::Path<(String,)>) -> HttpRespons
 
 fn get_json(_req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
     let api_key = (&path.0).to_string();
-    let body = IncidentQueueItem {
+    let body = EventQueueItem {
         id: 123,
         api_key,
         event_type: "".to_string(),
@@ -34,11 +34,11 @@ fn get_json(_req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
     HttpResponse::Ok().json(body)
 }
 
-fn post_json(container: web::Data<Mutex<WebContextContainer>>, item: web::Json<IncidentQueueItem>) -> HttpResponse {
+fn post_json(container: web::Data<Mutex<WebContextContainer>>, item: web::Json<EventQueueItem>) -> HttpResponse {
 
     let container = container.lock().unwrap();
     let item = item.into_inner();
-    let insert_result = container.queue.create_incident(&item);
+    let insert_result = container.queue.create_event(&item);
 
     match insert_result {
         Ok(res) if res > 0 => {
