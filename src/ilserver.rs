@@ -2,8 +2,10 @@ use std::net;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use log::{info, error};
 use std::sync::Mutex;
+use std::convert::TryInto;
 
 use crate::ilqueue::{ILQueue, EventQueueItem};
+use crate::ilconfig::ILConfig;
 
 struct WebContextContainer {
     queue: ILQueue,
@@ -63,13 +65,14 @@ fn config_app(cfg: &mut web::ServiceConfig) {
     cfg.service(web::resource("/json/{name}").route(web::get().to(get_json)));
 }
 
-pub fn run_server<A: net::ToSocketAddrs>(queue: ILQueue, addr: A) -> std::io::Result<()> {
+pub fn run_server<A: net::ToSocketAddrs>(config: ILConfig, queue: ILQueue, addr: A) -> std::io::Result<()> {
     let container = web::Data::new(Mutex::new(WebContextContainer{ queue }));
     HttpServer::new(move|| App::new()
         .register_data(container.clone())
         .wrap(middleware::Logger::default())
-        .data(web::JsonConfig::default().limit(512))
+        .data(web::JsonConfig::default().limit(256))
         .configure(config_app))
+        .workers(config.http_worker_count.try_into().unwrap())
         .bind(addr)
         .unwrap()
         .run()

@@ -2,6 +2,7 @@
 pub struct ILConfig {
     pub http_host: String,
     pub http_port: i32,
+    pub http_worker_count: i8,
     pub db_file: String,
 }
 
@@ -11,6 +12,7 @@ impl ILConfig {
         ILConfig {
             http_host: "0.0.0.0".to_string(),
             http_port: 8977,
+            http_worker_count: 1,
             db_file: "./ilagent.db3".to_string(),
         }
     }

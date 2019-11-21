@@ -1,2 +1,2 @@
 #!/bin/bash
-RUST_LOG=info cargo run
+cargo run -- -p 8977 daemon -v -v -v

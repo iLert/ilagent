@@ -90,7 +90,7 @@ fn run_daemon(config: &ILConfig) -> () {
     let poll_job = run_poll_job(config.clone(), are_we_running);
 
     info!("Starting server..");
-    run_server(queue_web_instance, config.get_http_bind_str().as_str()).unwrap();
+    run_server(config.clone(), queue_web_instance, config.get_http_bind_str().as_str()).unwrap();
 
     poll_job.join().unwrap();
     ()
