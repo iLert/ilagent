@@ -18,4 +18,13 @@ impl ILConfig {
     pub fn get_http_bind_str(&self) -> String {
         format!("{}:{}", self.http_host, self.http_port)
     }
+
+    pub fn get_port_as_string(&self) -> String {
+        return self.http_port.to_string();
+    }
+
+    pub fn set_port_from_str(&mut self, str: &str) -> () {
+        self.http_port = str.parse::<i32>().unwrap();
+        ()
+    }
 }
