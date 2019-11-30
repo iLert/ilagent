@@ -1,4 +1,4 @@
-1. create ilert (api) rust crate / map only eventing api for now
+1. ~~create ilert (api) rust crate / map only eventing api for now~~
 2. use ilert rust crate to setup ilclient.rs, use client to call daemon api
 3. finish rest api for ilserver
 4. make event api calls for poll
