@@ -86,7 +86,8 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
     match insert_result {
         Ok(res) => match res {
             Some(val) => {
-                info!("Event successfully created.");
+                let event_id = val.id.unwrap();
+                info!("Event {} successfully created and added to queue.", event_id);
                 HttpResponse::Ok().json(EventQueueItemJson::from_db(val))
             },
             None => {

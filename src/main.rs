@@ -64,7 +64,7 @@ fn main() {
     match command {
         "daemon" => run_daemon(&config),
         "event" => run_create_event(&config),
-        "heartbeat" => run_create_heartbeat(&config),
+        // "heartbeat" => run_heartbeat_daemon(&config), // TODO: run this as optional config that starts a thread in daemon
         _ => panic!("Unsupported command provided.") // unreachable
     }
 }
@@ -97,6 +97,3 @@ fn run_create_event(config: &ILConfig) -> () {
     // TODO: implement
 }
 
-fn run_create_heartbeat(config: &ILConfig) -> () {
-    // TODO: implement
-}

@@ -169,7 +169,7 @@ impl ILDatabase {
         }
     }
 
-    pub fn get_il_events(&self, limit: i32) -> Vec<Result<EventQueueItem,  rusqlite::Error>> {
+    pub fn get_il_events(&self, limit: i32) -> Result<Vec<EventQueueItem>,  rusqlite::Error> {
 
         let mut stmt = self.conn.prepare("SELECT * FROM event_items LIMIT ?1").unwrap();
         let query_result = stmt
@@ -183,10 +183,28 @@ impl ILDatabase {
             }));
 
         match query_result {
-            Ok(items) => items.collect::<Vec<Result<EventQueueItem,  rusqlite::Error>>>(),
-            Err(error) => {
-                error!("Failed to fetch events {:?}.", error);
-                Vec::new()
+            Ok(items) => {
+
+                let vec = items
+                    .filter(|row_res| {
+                        match row_res {
+                            Ok(row) => true,
+                            _ => false
+                        }
+                    })
+                    .map(|row_res| {
+                        match row_res {
+                            Ok(row) => row,
+                            _ => EventQueueItem::new()
+                        }
+                    })
+                    .collect::<Vec<EventQueueItem>>();
+
+                Ok(vec)
+            },
+            Err(e) => {
+                error!("Failed to fetch events {:?}.", e);
+                Err(e)
             }
         }
     }
@@ -216,10 +234,10 @@ impl ILDatabase {
         }
     }
 
-    pub fn delete_il_event(&self, item: EventQueueItem) -> Result<usize,  rusqlite::Error> {
+    pub fn delete_il_event(&self, id: &str) -> Result<usize,  rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM event_items WHERE id = ?1",
-            &[&item.id],
+            &[&id],
         )
     }
 }
