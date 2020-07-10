@@ -6,17 +6,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use clap::{Arg, App};
 
-mod ilconfig;
-use ilconfig::ILConfig;
+mod il_config;
+use il_config::ILConfig;
 
-mod ilqueue;
-use ilqueue::ILQueue;
+mod il_db;
+use il_db::ILDatabase;
 
-mod ilserver;
-use ilserver::run_server;
-
-mod ilpoll;
-use ilpoll::run_poll_job;
+mod il_server;
+mod il_poll;
 
 fn main() {
 
@@ -66,8 +63,8 @@ fn main() {
 
     match command {
         "daemon" => run_daemon(&config),
-        "event" => send_create_event(&config),
-        "heartbeat" => send_create_heartbeat(&config),
+        "event" => run_create_event(&config),
+        "heartbeat" => run_create_heartbeat(&config),
         _ => panic!("Unsupported command provided.") // unreachable
     }
 }
@@ -82,24 +79,24 @@ fn run_daemon(config: &ILConfig) -> () {
     }).expect("Error setting Ctrl-C handler");
 
     info!("Starting..");
-    let queue_web_instance = ILQueue::new(config.db_file.as_str());
+    let db_web_instance = ILDatabase::new(config.db_file.as_str());
     info!("Migrating DB..");
-    queue_web_instance.prepare_database();
+    db_web_instance.prepare_database();
 
     info!("Starting poll job..");
-    let poll_job = run_poll_job(config.clone(), are_we_running);
+    let poll_job = il_poll::run_poll_job(&config, &are_we_running);
 
     info!("Starting server..");
-    run_server(config.clone(), queue_web_instance, config.get_http_bind_str().as_str()).unwrap();
+    il_server::run_server(&config, db_web_instance).unwrap();
 
     poll_job.join().unwrap();
     ()
 }
 
-fn send_create_event(config: &ILConfig) -> () {
+fn run_create_event(config: &ILConfig) -> () {
     // TODO: implement
 }
 
-fn send_create_heartbeat(config: &ILConfig) -> () {
+fn run_create_heartbeat(config: &ILConfig) -> () {
     // TODO: implement
 }
