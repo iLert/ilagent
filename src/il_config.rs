@@ -4,6 +4,7 @@ pub struct ILConfig {
     pub http_port: i32,
     pub http_worker_count: i8,
     pub db_file: String,
+    pub heartbeat_key: Option<String>
 }
 
 impl ILConfig {
@@ -14,6 +15,7 @@ impl ILConfig {
             http_port: 8977,
             http_worker_count: 1,
             db_file: "./ilagent.db3".to_string(),
+            heartbeat_key: None
         }
     }
 

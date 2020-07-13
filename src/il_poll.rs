@@ -25,7 +25,7 @@ pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
         // thread gets its own db instance, no migrations required
         let db = ILDatabase::new(config.db_file.as_str());
         loop {
-            thread::sleep(Duration::new(1, 0));
+            thread::sleep(Duration::from_millis(300));
             if !are_we_running.load(Ordering::SeqCst) {
                 break;
             }
