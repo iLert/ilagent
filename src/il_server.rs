@@ -179,7 +179,7 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
         return HttpResponse::BadRequest().json(json!({ "error": "Unsupported value for field 'priority'." }));
     }
 
-    let insert_result = container.db.create_il_event(&mut event);
+    let insert_result = container.db.create_il_event(&event);
 
     match insert_result {
         Ok(res) => match res {

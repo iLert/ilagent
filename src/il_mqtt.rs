@@ -12,6 +12,7 @@ use std::str;
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{HeartbeatApiResource};
 
+use crate::il_db::ILDatabase;
 use crate::il_config::ILConfig;
 use crate::il_server::EventQueueItemJson;
 use crate::il_hbt;
@@ -31,6 +32,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
 
         let mut connected = false;
         let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+        let db = ILDatabase::new(config.db_file.as_str());
 
         let mqtt_host = config.mqtt_host.expect("Missing mqtt host");
         let mqtt_port = config.mqtt_port.expect("Missing mqtt port");
@@ -96,7 +98,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
                     if heartbeat_topic == message.topic {
                         handle_heartbeat_message(&ilert_client, payload);
                     } else if event_topic == message.topic {
-                        handle_event_message(&ilert_client, payload);
+                        handle_event_message(&ilert_client, &db, payload);
                     }
                 },
                 _ => continue
@@ -138,11 +140,24 @@ fn handle_heartbeat_message(ilert_client: &ILert, payload: &str) -> () {
     }
 }
 
-fn handle_event_message(ilert_client: &ILert, payload: &str) -> () {
-    // TODO: dont send straight, store in db
+fn handle_event_message(ilert_client: &ILert, db: &ILDatabase, payload: &str) -> () {
     let parsed = parse_event_json(payload);
     if let Some(event) = parsed {
         let db_event = EventQueueItemJson::to_db(event);
-        il_poll::process_queued_event(ilert_client, &db_event);
+        let insert_result = db.create_il_event(&db_event);
+        match insert_result {
+            Ok(res) => match res {
+                Some(val) => {
+                    let event_id = val.id.clone().unwrap_or("".to_string());
+                    info!("Event {} successfully created and added to queue.", event_id);
+                },
+                None => {
+                    error!("Failed to create event, result is empty");
+                }
+            },
+            Err(e) => {
+                error!("Failed to create event {:?}.", e);
+            }
+        }
     }
 }
