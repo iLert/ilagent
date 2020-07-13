@@ -4,6 +4,7 @@ use log::{info, error};
 use std::sync::Mutex;
 use std::convert::TryInto;
 use serde_derive::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::il_db::{ILDatabase, EventQueueItem};
 use crate::il_config::ILConfig;
@@ -16,7 +17,7 @@ pub struct EventImageJson {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventLinksJson {
+pub struct EventLinkJson {
     pub href: String,
     pub text: Option<String>
 }
@@ -31,34 +32,100 @@ pub struct EventQueueItemJson {
     pub incidentKey: Option<String>,
     pub priority: Option<String>,
     pub images: Option<Vec<EventImageJson>>,
-    pub links: Option<Vec<EventLinksJson>>
+    pub links: Option<Vec<EventLinkJson>>,
+    pub customDetails: Option<serde_json::Value>
 }
 
 impl EventQueueItemJson {
 
     pub fn to_db(item: EventQueueItemJson) -> EventQueueItem {
+
+        let images = match item.images {
+            Some(v) => {
+                let serialised = serde_json::to_string(&v);
+                match serialised {
+                    Ok(str) => Some(str),
+                    _ => None
+                }
+            },
+            None => None
+        };
+
+        let links = match item.links {
+            Some(v) => {
+                let serialised = serde_json::to_string(&v);
+                match serialised {
+                    Ok(str) => Some(str),
+                    _ => None
+                }
+            },
+            None => None
+        };
+
+        let custom_details = match item.customDetails {
+            Some(val) => Some(val.to_string()),
+            None => None
+        };
+
         EventQueueItem {
             id: None,
             api_key: item.apiKey,
             event_type: item.eventType,
             incident_key: item.incidentKey,
             summary: item.summary,
-            created_at: None
-            // TODO: add other fields
+            created_at: None,
+            priority: item.priority,
+            images,
+            links,
+            custom_details
         }
     }
 
     pub fn from_db(item: EventQueueItem) -> EventQueueItemJson {
+
+        let images : Option<Vec<EventImageJson>> = match item.images {
+            Some(str) => {
+                let parsed = serde_json::from_str(str.as_str());
+                match parsed {
+                    Ok(v) => Some(v),
+                    _ => None
+                }
+            },
+            None => None
+        };
+
+        let links : Option<Vec<EventLinkJson>> = match item.links {
+            Some(str) => {
+                let parsed = serde_json::from_str(str.as_str());
+                match parsed {
+                    Ok(v) => Some(v),
+                    _ => None
+                }
+            },
+            None => None
+        };
+
+        let custom_details : Option<serde_json::Value> = match item.custom_details {
+            Some(str) => {
+                let parsed = serde_json::from_str(str.as_str());
+                match parsed {
+                    Ok(v) => Some(v),
+                    _ => None
+                }
+            },
+            None => None
+        };
+
         EventQueueItemJson {
              apiKey: item.api_key,
              eventType: item.event_type,
              summary: item.summary,
              details: None,
              incidentKey: item.incident_key,
-             priority: None,
-             images: None,
-             links: None
-            // TODO: add other fields
+             priority: item.priority,
+             images,
+             links,
+             customDetails: custom_details
         }
     }
 }
@@ -86,7 +153,7 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
     match insert_result {
         Ok(res) => match res {
             Some(val) => {
-                let event_id = val.id.unwrap();
+                let event_id = val.id.clone().unwrap();
                 info!("Event {} successfully created and added to queue.", event_id);
                 HttpResponse::Ok().json(EventQueueItemJson::from_db(val))
             },

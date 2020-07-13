@@ -64,6 +64,7 @@ fn main() {
     match command {
         "daemon" => run_daemon(&config),
         "event" => run_create_event(&config),
+        // TODO: add mqtt mode
         // "heartbeat" => run_heartbeat_daemon(&config), // TODO: run this as optional config that starts a thread in daemon
         _ => panic!("Unsupported command provided.") // unreachable
     }
