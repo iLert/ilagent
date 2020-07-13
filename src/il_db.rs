@@ -1,11 +1,12 @@
 use rusqlite::types::ToSql;
-use rusqlite::{Connection, NO_PARAMS};
+use rusqlite::{Connection, NO_PARAMS, Row};
 use log::{info, error};
 use serde_derive::{Deserialize, Serialize};
 use chrono::prelude::*;
 use uuid::Uuid;
 
-const EVENT_TYPE_ALERT: &str = "ALERT";
+use ilert::ilert_builders::{ILertEventType};
+
 const CURRENT_VERSION: i32 = 1;
 const VERSION_KEY: &str = "version";
 
@@ -37,6 +38,7 @@ pub struct EventQueueItem {
     pub event_type: String,
     pub incident_key: Option<String>,
     pub summary: String,
+    pub details: Option<String>,
     pub created_at: Option<String>,
     pub priority: Option<String>,
     pub images: Option<String>,
@@ -50,9 +52,10 @@ impl EventQueueItem {
         EventQueueItem {
             id: None,
             api_key: "".to_string(),
-            event_type: EVENT_TYPE_ALERT.to_string(),
+            event_type: ILertEventType::ALERT.as_str().to_string(),
             incident_key: None,
             summary: "".to_string(),
+            details: None,
             created_at: None,
             priority: None,
             images: None,
@@ -100,7 +103,8 @@ impl ILDatabase {
                       priority           TEXT NULL,
                       images             TEXT NULL,
                       links              TEXT NULL,
-                      custom_details     TEXT NULL
+                      custom_details     TEXT NULL,
+                      details            TEXT NULL
                   )",
                 NO_PARAMS,
             );
@@ -175,22 +179,29 @@ impl ILDatabase {
         )
     }
 
+    fn convert_db_row_to_event(row: &Row) -> Result<EventQueueItem, rusqlite::Error> {
+        Ok(EventQueueItem {
+            id: row.get(0).unwrap_or(None),
+            api_key: row.get(1).unwrap_or("".to_string()),
+            event_type: row.get(2).unwrap_or(ILertEventType::ALERT.as_str().to_string()),
+            incident_key: row.get(3).unwrap_or(None),
+            summary: row.get(4).unwrap_or("".to_string()),
+            created_at: row.get(5).unwrap_or(None),
+            priority: row.get(6).unwrap_or(None),
+            images: row.get(7).unwrap_or(None),
+            links: row.get(8).unwrap_or(None),
+            custom_details: row.get(9).unwrap_or(None),
+            details: row.get(10).unwrap_or(None)
+        })
+    }
+
     pub fn get_il_event(&self, event_id: &str) -> Result<Option<EventQueueItem>, rusqlite::Error> {
 
         let mut stmt = self.conn.prepare("SELECT * FROM event_items WHERE id = ?1").unwrap();
         let query_result = stmt
-            .query_map(&[&event_id], |row| Ok(EventQueueItem {
-                id: row.get(0).unwrap_or(None),
-                api_key: row.get(1).unwrap_or("".to_string()),
-                event_type: row.get(2).unwrap_or(EVENT_TYPE_ALERT.to_string()),
-                incident_key: row.get(3).unwrap_or(None),
-                summary: row.get(4).unwrap_or("".to_string()),
-                created_at: row.get(5).unwrap_or(None),
-                priority: row.get(6).unwrap_or(None),
-                images: row.get(7).unwrap_or(None),
-                links: row.get(8).unwrap_or(None),
-                custom_details: row.get(9).unwrap_or(None)
-            }));
+            .query_map(&[&event_id], |row| {
+                ILDatabase::convert_db_row_to_event(row)
+            });
 
         match query_result {
             Ok(items) => {
@@ -227,18 +238,9 @@ impl ILDatabase {
 
         let mut stmt = self.conn.prepare("SELECT * FROM event_items LIMIT ?1").unwrap();
         let query_result = stmt
-            .query_map(&[&limit], |row| Ok(EventQueueItem {
-                id: row.get(0).unwrap_or(None),
-                api_key: row.get(1).unwrap_or("".to_string()),
-                event_type: row.get(2).unwrap_or(EVENT_TYPE_ALERT.to_string()),
-                incident_key: row.get(3).unwrap_or(None),
-                summary: row.get(4).unwrap_or("".to_string()),
-                created_at: row.get(5).unwrap_or(None),
-                priority: row.get(6).unwrap_or(None),
-                images: row.get(7).unwrap_or(None),
-                links: row.get(8).unwrap_or(None),
-                custom_details: row.get(9).unwrap_or(None)
-            }));
+            .query_map(&[&limit], |row| {
+                ILDatabase::convert_db_row_to_event(row)
+            });
 
         match query_result {
             Ok(items) => {
@@ -278,11 +280,12 @@ impl ILDatabase {
         };
 
         let insert_result = self.conn.execute(
-            "INSERT INTO event_items (api_key, event_type, incident_key, summary, created_at, id)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO event_items (api_key, event_type, incident_key, summary, created_at, id,
+                priority, images, links, custom_details, details)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             &[&item.api_key as &dyn ToSql, &item.event_type, &item.incident_key,
                 &item.summary, created_at, &item_id,
-                &item.priority, &item.images, &item.links, &item.custom_details],
+                &item.priority, &item.images, &item.links, &item.custom_details, &item.details],
         );
 
         match insert_result {

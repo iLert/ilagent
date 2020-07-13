@@ -5,22 +5,11 @@ use std::sync::Mutex;
 use std::convert::TryInto;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
+use serde_json::json;
+use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority};
 
 use crate::il_db::{ILDatabase, EventQueueItem};
 use crate::il_config::ILConfig;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventImageJson {
-    pub src: String,
-    pub href: Option<String>,
-    pub alt: Option<String>
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventLinkJson {
-    pub href: String,
-    pub text: Option<String>
-}
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,8 +20,8 @@ pub struct EventQueueItemJson {
     pub details: Option<String>,
     pub incidentKey: Option<String>,
     pub priority: Option<String>,
-    pub images: Option<Vec<EventImageJson>>,
-    pub links: Option<Vec<EventLinkJson>>,
+    pub images: Option<Vec<EventImage>>,
+    pub links: Option<Vec<EventLink>>,
     pub customDetails: Option<serde_json::Value>
 }
 
@@ -73,6 +62,7 @@ impl EventQueueItemJson {
             event_type: item.eventType,
             incident_key: item.incidentKey,
             summary: item.summary,
+            details: item.details,
             created_at: None,
             priority: item.priority,
             images,
@@ -83,7 +73,7 @@ impl EventQueueItemJson {
 
     pub fn from_db(item: EventQueueItem) -> EventQueueItemJson {
 
-        let images : Option<Vec<EventImageJson>> = match item.images {
+        let images : Option<Vec<EventImage>> = match item.images {
             Some(str) => {
                 let parsed = serde_json::from_str(str.as_str());
                 match parsed {
@@ -94,7 +84,7 @@ impl EventQueueItemJson {
             None => None
         };
 
-        let links : Option<Vec<EventLinkJson>> = match item.links {
+        let links : Option<Vec<EventLink>> = match item.links {
             Some(str) => {
                 let parsed = serde_json::from_str(str.as_str());
                 match parsed {
@@ -120,7 +110,7 @@ impl EventQueueItemJson {
              apiKey: item.api_key,
              eventType: item.event_type,
              summary: item.summary,
-             details: None,
+             details: item.details,
              incidentKey: item.incident_key,
              priority: item.priority,
              images,
@@ -147,12 +137,21 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
 
     let container = container.lock();
     if container.is_err() {
-        return HttpResponse::InternalServerError().body("Failed to get mutex container handle");
+        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to get mutex container handle" }));
     }
     let container = container.unwrap();
 
     let event = event.into_inner();
     let mut event = EventQueueItemJson::to_db(event);
+
+    if ILertEventType::from_str(event.event_type.as_str()).is_err() {
+        return HttpResponse::BadRequest().json(json!({ "error": "Unsupported value for field 'eventType'." }));
+    }
+
+    if event.priority.is_some() && ILertPriority::from_str(event.priority.clone().unwrap().as_str()).is_err() {
+        return HttpResponse::BadRequest().json(json!({ "error": "Unsupported value for field 'priority'." }));
+    }
+
     let insert_result = container.db.create_il_event(&mut event);
 
     match insert_result {
@@ -164,12 +163,12 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
             },
             None => {
                 error!("Failed to create event, result is empty");
-                HttpResponse::InternalServerError().body("Failed to create event.")
+                HttpResponse::InternalServerError().json(json!({ "error":  "Failed to create event." }))
             }
         },
         Err(e) => {
             error!("Failed to create event {:?}.", e);
-            HttpResponse::InternalServerError().body("Internal error occurred.")
+            HttpResponse::InternalServerError().json(json!({ "error":  "Internal error occurred." }))
         }
     }
 }
@@ -185,7 +184,7 @@ pub fn run_server(config: &ILConfig, db: ILDatabase) -> std::io::Result<()> {
     HttpServer::new(move|| App::new()
         .register_data(container.clone())
         .wrap(middleware::Logger::default())
-        .data(web::JsonConfig::default().limit(256))
+        .data(web::JsonConfig::default().limit(16000))
         .configure(config_app))
         .workers(config.http_worker_count.try_into().unwrap())
         .bind(addr.as_str())

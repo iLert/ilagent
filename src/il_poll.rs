@@ -4,13 +4,15 @@ use log::{info, warn, error};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use reqwest::StatusCode;
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventApiResource, ILertEventType};
+use ilert::ilert_builders::{EventApiResource, ILertEventType, ILertPriority};
+
+use crate::il_server::EventQueueItemJson;
 
 use crate::il_db::{ILDatabase, EventQueueItem};
 use crate::il_config::ILConfig;
-use reqwest::StatusCode;
 
 pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinHandle<()> {
 
@@ -37,8 +39,10 @@ pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
             let items_result = db.get_il_events(50);
             match items_result {
                 Ok(items) => {
-                    info!("Found {} queued events.", items.len());
-                    process_queued_events(&ilert_client, &db, items);
+                    if !items.is_empty() {
+                        info!("Found {} queued events.", items.len());
+                        process_queued_events(&ilert_client, &db, items);
+                    }
                 },
                 Err(e) => error!("Failed to fetch queued events {}", e)
             };
@@ -67,25 +71,45 @@ fn process_queued_events(ilert_client: &ILert, db: &ILDatabase, events: Vec<Even
 
 fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
 
+    let parsed_event = EventQueueItemJson::from_db(event.clone());
+
     let event_id = event.id.clone().unwrap_or("".to_string());
     let event_type = ILertEventType::from_str(event.event_type.as_str());
     let event_type = match event_type {
         Ok(et) => et,
         _ => {
             error!("Failed to parse event {} with type {}", event_id, event.event_type);
-            return false // broken content type, drop this event
+            return false // broken event type, drop this event
         }
+    };
+
+    let priority : Option<ILertPriority> = match event.clone().priority {
+        Some(prio_str) => {
+            let parsed = ILertPriority::from_str(prio_str.as_str());
+            match parsed {
+                Ok(val) => Some(val),
+                _ => {
+                    error!("Failed to parse event {} with priority {}", event_id, prio_str);
+                    return false // broken event priority, drop this event
+                }
+            }
+        },
+        None => None
     };
 
     let post_result = ilert_client
         .post()
-        .event(
+        .event_with_details(
             event.api_key.as_str(),
             event_type,
             event.summary.as_str(),
-            None,
-            event.incident_key.clone())
-        // TODO: send additional variables
+            event.incident_key.clone(),
+            event.details.clone(),
+            priority,
+            parsed_event.images,
+            parsed_event.links,
+            parsed_event.customDetails
+            )
         .execute();
 
     let response = match post_result {
