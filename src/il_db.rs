@@ -70,7 +70,7 @@ impl ILDatabase {
 
     pub fn new(path: &str) -> ILDatabase {
         info!("SQLite Version: {}", rusqlite::version());
-        let conn = Connection::open(path).unwrap();
+        let conn = Connection::open(path).expect("Failed to setup SQLite connection");
         ILDatabase { conn }
     }
 
@@ -84,7 +84,7 @@ impl ILDatabase {
                       created_at          TEXT NOT NULL
                   )",
             NO_PARAMS,
-        ).unwrap();
+        ).expect("Failed to bootstrap database");
 
         let mig_1 = self.get_il_value(DB_MIGRATION_V1);
         if mig_1.is_none() {

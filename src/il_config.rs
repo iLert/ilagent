@@ -26,7 +26,7 @@ impl ILConfig {
     }
 
     pub fn set_port_from_str(&mut self, str: &str) -> () {
-        self.http_port = str.parse::<i32>().unwrap();
+        self.http_port = str.parse::<i32>().expect("Failed to parse http port");
         ()
     }
 }

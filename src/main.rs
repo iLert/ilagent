@@ -46,7 +46,7 @@ fn main() {
     let port = matches.value_of("port").unwrap_or(default_port.as_str());
     config.set_port_from_str(port);
 
-    let command = matches.value_of("command").unwrap();
+    let command = matches.value_of("command").expect("Failed to parse provided command");
     info!("Using command: {}.", command);
 
     let log_level = match matches.occurrences_of("v") {
@@ -88,9 +88,9 @@ fn run_daemon(config: &ILConfig) -> () {
     let poll_job = il_poll::run_poll_job(&config, &are_we_running);
 
     info!("Starting server..");
-    il_server::run_server(&config, db_web_instance).unwrap();
+    il_server::run_server(&config, db_web_instance).expect("Failed to start http server");
 
-    poll_job.join().unwrap();
+    poll_job.join().expect("Failed to join poll thread");
     ()
 }
 

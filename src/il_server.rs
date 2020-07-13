@@ -145,7 +145,12 @@ fn get_index(_req: HttpRequest) -> HttpResponse {
 */
 fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json<EventQueueItemJson>) -> HttpResponse {
 
-    let container = container.lock().unwrap();
+    let container = container.lock();
+    if container.is_err() {
+        return HttpResponse::InternalServerError().body("Failed to get mutex container handle");
+    }
+    let container = container.unwrap();
+
     let event = event.into_inner();
     let mut event = EventQueueItemJson::to_db(event);
     let insert_result = container.db.create_il_event(&mut event);
@@ -153,7 +158,7 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
     match insert_result {
         Ok(res) => match res {
             Some(val) => {
-                let event_id = val.id.clone().unwrap();
+                let event_id = val.id.clone().unwrap_or("".to_string());
                 info!("Event {} successfully created and added to queue.", event_id);
                 HttpResponse::Ok().json(EventQueueItemJson::from_db(val))
             },
