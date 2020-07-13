@@ -18,6 +18,9 @@ use il_db::ILDatabase;
 mod il_hbt;
 use il_hbt::ping_heartbeat;
 
+mod il_mqtt;
+use il_mqtt::run_mqtt_job;
+
 mod il_poll;
 use il_poll::process_queued_event;
 use crate::il_db::EventQueueItem;
@@ -88,6 +91,46 @@ fn main() -> () {
             .takes_value(true)
         )
 
+        .arg(Arg::with_name("mqtt_host")
+            .short("m")
+            .long("mqtt_host")
+            .value_name("MQTT_HOST")
+            .help("If provided under daemon command, sets mqtt server to connect to")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_port")
+            .short("q")
+            .long("mqtt_port")
+            .value_name("MQTT_PORT")
+            .help("If provided under daemon command, sets mqtt port (default: '1883')")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_name")
+            .short("n")
+            .long("mqtt_name")
+            .value_name("MQTT_NAME")
+            .help("If provided under daemon command, sets mqtt client name (default: 'ilagent')")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_event_topic")
+            .short("e")
+            .long("mqtt_event_topic")
+            .value_name("MQTT_EVENT_TOPIC")
+            .help("MQTT topic to listen to (default: 'ilert/events')")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_heartbeat_topic")
+            .short("r")
+            .long("mqtt_heartbeat_topic")
+            .value_name("MQTT_HEARTBEAT_TOPIC")
+            .help("MQTT topic to listen to (default: 'ilert/heartbeats')")
+            .takes_value(true)
+        )
+
         .arg(Arg::with_name("v")
             .short("v")
             .long("verbose")
@@ -96,6 +139,7 @@ fn main() -> () {
             )
 
         // TODO: arg to override sqlite db location
+        // TODO: arg to override ilert_client host -> enables potential call to ilagent deployments
 
         .get_matches();
 
@@ -112,12 +156,29 @@ fn main() -> () {
         1 => "warn",
         2 => "info",
         3 => "debug",
-        _ => panic!("Maximum log level reached (4)")
+        _ => {
+            error!("Maximum log level reached (4)");
+            "debug"
+        }
     };
 
     if matches.is_present("heartbeat") {
         let heartbeat_key = matches.value_of("heartbeat").expect("Failed to parse heartbeat api key");
         config.heartbeat_key = Some(heartbeat_key.to_string());
+    }
+
+    if matches.is_present("mqtt_host") {
+        let mqtt_host = matches.value_of("mqtt_host").unwrap_or("127.0.0.1");
+        let mqtt_port_str = matches.value_of("mqtt_port").unwrap_or("1883");
+        let mqtt_name = matches.value_of("mqtt_name").unwrap_or("ilagent");
+        let mqtt_event_topic = matches.value_of("mqtt_event_topic").unwrap_or("ilert/events");
+        let mqtt_heartbeat_topic = matches.value_of("mqtt_heartbeat_topic").unwrap_or("ilert/heartbeats");
+
+        config.mqtt_host = Some(mqtt_host.to_string());
+        config.set_mqtt_port_from_str(mqtt_port_str);
+        config.mqtt_name = Some(mqtt_name.to_string());
+        config.mqtt_event_topic = Some(mqtt_event_topic.to_string());
+        config.mqtt_heartbeat_topic = Some(mqtt_heartbeat_topic.to_string());
     }
 
     env_logger::from_env(Env::default()
@@ -137,15 +198,15 @@ fn main() -> () {
     Starts http server with proxy functionality /api/v1/events and /api/v1/heartbeats
     Where events are queued in a local SQLite table to ensure delivery
     If provided, pings a heartbeat api key regularly
-    If provided, connects to MQTT broker and proxies events and heartbeats
+    If provided, connects to MQTT broker and proxies events (through queue) and heartbeats
 */
 fn run_daemon(config: &ILConfig) -> () {
 
     let are_we_running = Arc::new(AtomicBool::new(true));
-    let are_we_running_a = are_we_running.clone();
+    let are_we_running_trigger = are_we_running.clone();
     ctrlc::set_handler(move || {
         info!("Received Ctrl+C.");
-        are_we_running_a.store(false, Ordering::SeqCst);
+        are_we_running_trigger.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
     info!("Starting..");
@@ -162,6 +223,12 @@ fn run_daemon(config: &ILConfig) -> () {
         hbt_job = Some(il_hbt::run_hbt_job(&config, &are_we_running));
     }
 
+    let mut mqtt_job = None;
+    if config.mqtt_host.is_some() {
+        info!("Running MQTT thread..");
+        mqtt_job = Some(il_mqtt::run_mqtt_job(&config, &are_we_running))
+    }
+
     info!("Starting server..");
     il_server::run_server(&config, db_web_instance).expect("Failed to start http server");
     // blocking..
@@ -172,11 +239,15 @@ fn run_daemon(config: &ILConfig) -> () {
         handle.join().expect("Failed to join heartbeat thread");
     }
 
+    if let Some(handle) = mqtt_job {
+        handle.join().expect("Failed to join mqtt thread");
+    }
+
     ()
 }
 
 /**
-    Attempts to create event, one time - skips queue
+    Attempts to create an event, one time - skips queue
 */
 fn run_event(config: &ILConfig, matches: &ArgMatches) -> () {
 
@@ -202,6 +273,8 @@ fn run_event(config: &ILConfig, matches: &ArgMatches) -> () {
         Some(k) => Some(k.to_string()),
         None => None
     };
+
+    // TODO: add more usefull fields e.g. priority, images?
 
     let mut event = EventQueueItem::new_with_required(api_key, event_type, summary, incident_key);
     event.id = Some("provided".to_string()); // prettier logs
