@@ -1,0 +1,2 @@
+#!/bin/bash
+cargo run -- event -v -v -k il1ins0620d12334650aec412a3872867c63 -t ALERT -s 'a summary from the shell' -i bla123

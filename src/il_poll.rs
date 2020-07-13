@@ -69,7 +69,7 @@ fn process_queued_events(ilert_client: &ILert, db: &ILDatabase, events: Vec<Even
     }
 }
 
-fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
+pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
 
     let parsed_event = EventQueueItemJson::from_db(event.clone());
 

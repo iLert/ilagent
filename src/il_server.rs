@@ -142,7 +142,12 @@ fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, req: HttpRequ
     }
     let container = container.unwrap();
 
-    let ilert_client = ILert::new().unwrap();
+    let ilert_client = ILert::new();
+    if ilert_client.is_err() {
+        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to create iLert client" }));
+    }
+    let ilert_client = ilert_client.unwrap();
+
     match il_hbt::ping_heartbeat(&ilert_client, api_key) {
         true => {
             info!("Proxied heartbeat {}", api_key);

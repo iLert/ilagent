@@ -63,6 +63,23 @@ impl EventQueueItem {
             custom_details: None
         }
     }
+
+    pub fn new_with_required(api_key: &str, event_type: &str, summary: &str,
+                            incident_key: Option<String>) -> EventQueueItem {
+        EventQueueItem {
+            id: None,
+            api_key: api_key.to_string(),
+            event_type: event_type.to_string(),
+            incident_key,
+            summary: summary.to_string(),
+            details: None,
+            created_at: None,
+            priority: None,
+            images: None,
+            links: None,
+            custom_details: None
+        }
+    }
 }
 
 pub struct ILDatabase {
@@ -112,9 +129,21 @@ impl ILDatabase {
             self.set_il_val(DB_MIGRATION_V1, DB_MIGRATION_VAL)
                 .expect("Database migration failed");
             info!("Database migrated to {}", DB_MIGRATION_V1);
-        } else {
-            info!("Already migrated to {}", DB_MIGRATION_V1);
         }
+
+        /*
+        Run simple db migrations, if needed, like this:
+
+        let mig_XX = self.get_il_value(DB_MIGRATION_VXX);
+        if mig_XX.is_none() {
+
+            // SQL MAGIC HERE
+
+            self.set_il_val(DB_MIGRATION_VXX, DB_MIGRATION_VAL)
+                .expect("Database migration failed");
+            info!("Database migrated to {}", DB_MIGRATION_VXX);
+        }
+         */
 
         info!("Database is bootstrapped.");
         ()
