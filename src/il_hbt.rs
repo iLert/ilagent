@@ -46,14 +46,14 @@ pub fn run_hbt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinH
     hbt_thread
 }
 
-fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> () {
+pub fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> bool {
 
     let hbt_result = ilert_client
         .get()
         .heartbeat(api_key)
         .execute();
 
-    let _success = match hbt_result {
+    match hbt_result {
         Ok(result) => {
             let status_code = result.status.as_u16();
             match status_code {
@@ -68,5 +68,5 @@ fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> () {
             error!("Heartbeat http request failed {}", e);
             false
         }
-    };
+    }
 }

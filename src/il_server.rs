@@ -6,10 +6,13 @@ use std::convert::TryInto;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
 use serde_json::json;
-use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority};
 
 use crate::il_db::{ILDatabase, EventQueueItem};
 use crate::il_config::ILConfig;
+use crate::il_hbt;
+
+use ilert::ilert::ILert;
+use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority, HeartbeatApiResource};
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -127,7 +130,26 @@ struct WebContextContainer {
 fn get_index(_req: HttpRequest) -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.3.0")
+        .body("ilagent/0.2.0")
+}
+
+fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
+
+    let api_key = &path.0;
+    let container = container.lock();
+    if container.is_err() {
+        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to get mutex container handle" }));
+    }
+    let container = container.unwrap();
+
+    let ilert_client = ILert::new().unwrap();
+    match il_hbt::ping_heartbeat(&ilert_client, api_key) {
+        true => {
+            info!("Proxied heartbeat {}", api_key);
+            HttpResponse::Accepted().json(json!({}))
+        },
+        false => HttpResponse::InternalServerError().body("Failed to proxy heartbeat")
+    }
 }
 
 /**
@@ -174,8 +196,19 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
 }
 
 fn config_app(cfg: &mut web::ServiceConfig) {
-    cfg.service(web::resource("/").route(web::get().to(get_index)));
-    cfg.service(web::resource("/api/v1/events").route(web::post().to(post_event)));
+
+    cfg.service(web::resource("/")
+                    .route(web::get().to(get_index)) // /
+    );
+
+    cfg.service(web::resource("/api/v1/events")
+                    .route(web::post().to(post_event)) // POST
+    );
+
+    cfg.service(web::resource("/api/v1/heartbeats/{id}")
+                    .route(web::get().to(get_heartbeat)) // GET for api key
+                    // .route(web::delete().to(delete_check))
+    );
 }
 
 pub fn run_server(config: &ILConfig, db: ILDatabase) -> std::io::Result<()> {
