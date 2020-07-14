@@ -1,14 +1,12 @@
-use std::net;
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
 use log::{info, error};
 use std::sync::Mutex;
 use std::convert::TryInto;
 use serde_derive::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority, HeartbeatApiResource};
+use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority};
 
 use crate::il_db::{ILDatabase, EventQueueItem};
 use crate::il_config::ILConfig;
@@ -133,14 +131,9 @@ fn get_index(_req: HttpRequest) -> HttpResponse {
         .body("ilagent/0.2.0")
 }
 
-fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
+fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
 
     let api_key = &path.0;
-    let container = container.lock();
-    if container.is_err() {
-        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to get mutex container handle" }));
-    }
-    let container = container.unwrap();
 
     let ilert_client = ILert::new();
     if ilert_client.is_err() {
@@ -169,7 +162,7 @@ fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json
     let container = container.unwrap();
 
     let event = event.into_inner();
-    let mut event = EventQueueItemJson::to_db(event);
+    let event = EventQueueItemJson::to_db(event);
 
     if ILertEventType::from_str(event.event_type.as_str()).is_err() {
         return HttpResponse::BadRequest().json(json!({ "error": "Unsupported value for field 'eventType'." }));

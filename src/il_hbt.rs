@@ -1,10 +1,9 @@
 use std::thread;
 use std::thread::JoinHandle;
-use log::{info, warn, error};
+use log::{error};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use reqwest::StatusCode;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{HeartbeatApiResource};
@@ -17,7 +16,7 @@ pub fn run_hbt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinH
     let are_we_running = are_we_running.clone();
     let hbt_thread = thread::spawn(move || {
 
-        let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+        let ilert_client = ILert::new().expect("Failed to create iLert client");
         let mut last_run = Instant::now();
 
         let api_key = config.heartbeat_key

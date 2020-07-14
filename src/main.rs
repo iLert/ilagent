@@ -1,5 +1,3 @@
-#![allow(dead_code,unused)]
-
 use log::{debug, info, error};
 use env_logger::Env;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,24 +5,18 @@ use std::sync::Arc;
 use clap::{Arg, App, ArgMatches};
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventApiResource, EventImage, EventLink};
+use ilert::ilert_builders::{EventImage, EventLink};
 
 mod il_config;
 use il_config::ILConfig;
 
 mod il_db;
 use il_db::ILDatabase;
-
-mod il_hbt;
-use il_hbt::ping_heartbeat;
-
-mod il_mqtt;
-use il_mqtt::run_mqtt_job;
-
-mod il_poll;
-use il_poll::process_queued_event;
 use crate::il_db::EventQueueItem;
 
+mod il_hbt;
+mod il_mqtt;
+mod il_poll;
 mod il_server;
 
 fn main() -> () {
@@ -233,8 +225,8 @@ fn main() -> () {
     debug!("Running command: {}.", command);
     match command {
         "daemon" => run_daemon(&config),
-        "event" => run_event(&config, &matches),
-        "heartbeat" => run_heartbeat(&config, &matches),
+        "event" => run_event(&matches),
+        "heartbeat" => run_heartbeat(&matches),
         _ => panic!("Unsupported command provided.") // unreachable
     }
 }
@@ -294,7 +286,7 @@ fn run_daemon(config: &ILConfig) -> () {
 /**
     Attempts to create an event, one time - skips queue
 */
-fn run_event(config: &ILConfig, matches: &ArgMatches) -> () {
+fn run_event(matches: &ArgMatches) -> () {
 
     if !matches.is_present("api_key") {
         return error!("Missing api_key arg (-k, --api_key)");
@@ -376,7 +368,7 @@ fn run_event(config: &ILConfig, matches: &ArgMatches) -> () {
 /**
     Attempts to ping a heartbeat
 */
-fn run_heartbeat(config: &ILConfig, matches: &ArgMatches) -> () {
+fn run_heartbeat(matches: &ArgMatches) -> () {
 
     if !matches.is_present("api_key") {
         return error!("Missing api_key arg (-k, --api_key)");

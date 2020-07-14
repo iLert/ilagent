@@ -1,22 +1,19 @@
 use std::thread;
 use std::thread::JoinHandle;
-use log::{info, warn, error};
-use std::time::{Duration, Instant};
+use log::{info, error};
+use std::time::{Duration};
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
-use reqwest::StatusCode;
 use rumqttc::{MqttOptions, Client, QoS, Incoming};
 use std::str;
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{HeartbeatApiResource};
 
 use crate::il_db::ILDatabase;
 use crate::il_config::ILConfig;
 use crate::il_server::EventQueueItemJson;
 use crate::il_hbt;
-use crate::il_poll;
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -31,7 +28,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
     let mqtt_thread = thread::spawn(move || {
 
         let mut connected = false;
-        let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+        let ilert_client = ILert::new().expect("Failed to create iLert client");
         let db = ILDatabase::new(config.db_file.as_str());
 
         let mqtt_host = config.mqtt_host.expect("Missing mqtt host");
@@ -59,7 +56,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
 
         info!("Subscribing to mqtt topics {} and {}", event_topic.as_str(), heartbeat_topic.as_str());
 
-        for (i, invoke) in connection.iter().enumerate() {
+        for (_i, invoke) in connection.iter().enumerate() {
 
             // will end thread
             if !are_we_running.load(Ordering::SeqCst) {
@@ -79,7 +76,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
                 info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
             }
 
-            let (inc, out) = invoke.unwrap();
+            let (inc, _out) = invoke.unwrap();
             if inc.is_none() {
                 continue;
             }
@@ -98,7 +95,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
                     if heartbeat_topic == message.topic {
                         handle_heartbeat_message(&ilert_client, payload);
                     } else if event_topic == message.topic {
-                        handle_event_message(&ilert_client, &db, payload);
+                        handle_event_message(&db, payload);
                     }
                 },
                 _ => continue
@@ -140,7 +137,7 @@ fn handle_heartbeat_message(ilert_client: &ILert, payload: &str) -> () {
     }
 }
 
-fn handle_event_message(ilert_client: &ILert, db: &ILDatabase, payload: &str) -> () {
+fn handle_event_message(db: &ILDatabase, payload: &str) -> () {
     let parsed = parse_event_json(payload);
     if let Some(event) = parsed {
         let db_event = EventQueueItemJson::to_db(event);

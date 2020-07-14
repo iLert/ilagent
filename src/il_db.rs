@@ -7,9 +7,6 @@ use uuid::Uuid;
 
 use ilert::ilert_builders::{ILertEventType};
 
-const CURRENT_VERSION: i32 = 1;
-const VERSION_KEY: &str = "version";
-
 const DB_MIGRATION_VAL: &str = "1";
 const DB_MIGRATION_V1: &str = "mig_1";
 
@@ -124,7 +121,7 @@ impl ILDatabase {
                       details            TEXT NULL
                   )",
                 NO_PARAMS,
-            );
+            ).expect("Failed to migrate database");
 
             self.set_il_val(DB_MIGRATION_V1, DB_MIGRATION_VAL)
                 .expect("Database migration failed");
@@ -201,12 +198,13 @@ impl ILDatabase {
         )
     }
 
+    /*
     pub fn delete_il_item(&self, key: &str) -> Result<usize,  rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM ilagent WHERE key = ?1",
             &[&key],
         )
-    }
+    } */
 
     fn convert_db_row_to_event(row: &Row) -> Result<EventQueueItem, rusqlite::Error> {
         Ok(EventQueueItem {
@@ -238,7 +236,7 @@ impl ILDatabase {
                 let vec = items
                     .filter(|row_res| {
                         match row_res {
-                            Ok(row) => true,
+                            Ok(_row) => true,
                             _ => false
                         }
                     })
@@ -277,7 +275,7 @@ impl ILDatabase {
                 let vec = items
                     .filter(|row_res| {
                         match row_res {
-                            Ok(row) => true,
+                            Ok(_row) => true,
                             _ => false
                         }
                     })

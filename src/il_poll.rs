@@ -4,7 +4,6 @@ use log::{info, warn, error};
 use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use reqwest::StatusCode;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventApiResource, ILertEventType, ILertPriority};
@@ -20,7 +19,7 @@ pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
     let are_we_running = are_we_running.clone();
     let poll_thread = thread::spawn(move || {
 
-        let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+        let ilert_client = ILert::new().expect("Failed to create iLert client");
         let mut last_run = Instant::now();
         // thread gets its own db instance, no migrations required
         let db = ILDatabase::new(config.db_file.as_str());
