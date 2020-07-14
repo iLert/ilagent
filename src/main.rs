@@ -25,7 +25,7 @@ fn main() -> () {
 
         .version("0.2.0")
         .author("iLert GmbH. <support@ilert.com>")
-        .about("The iLert Agent lets you easily integrate your system requirements with iLert.")
+        .about("The iLert Agent 🦀 📦 is a program that lets you easily integrate your monitoring system with iLert.")
 
         .arg(Arg::with_name("COMMAND")
             .help("The actual command that should be executed.")

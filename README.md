@@ -20,6 +20,7 @@ to monitor the uptime of the agent.
 - To adjust the log level you can provide multiple `-v -v #info` verbose flags, default is error.
 - The event command supports additional args to add an image `-g 'url'`, link `-l 'url'` or priority `-o 'LOW'`.
 - You can adjust the MQTT topics that the proxy is listening on `-e 'ilert/events'` or `-r 'ilert/heartbeats'`
+- The agent will buffer events locally using SQLite3 it will therefore require file system access in daemon mode.
 
 You can always run `ilagent --help` or take a look at our [documentation](https://docs.ilert.com/ilagent) for help.
 
