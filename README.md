@@ -12,6 +12,8 @@ The iLert agent comes in a single binary and helps you to
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
 
+<p align="center"><img src="/img/demo.gif?raw=true"/></p>
+
 ## Downloading / Installing
 
 For MacOS and Linux we also provide this one-liner to automatically install the agent:
