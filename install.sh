@@ -8,7 +8,7 @@ if [ "$(uname)" == "Darwin" ]; then
   rm $INSTALL_URI || true
   curl -sL $FILE_URL --output $INSTALL_URI
   chmod 777 $INSTALL_URI
-  ilagent -V
+  ilagent --help
 
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
 
@@ -16,7 +16,7 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
   rm $INSTALL_URI || true
   curl -sL $FILE_URL --output $INSTALL_URI
   chmod 777 $INSTALL_URI
-  ilagent -V
+  ilagent --help
 
 elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
     echo "Unsupported platform, please install manually."
