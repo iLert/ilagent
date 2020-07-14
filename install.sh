@@ -7,10 +7,10 @@ else
 fi
 
 VERSION="0.2.0"
-INSTALL_URI="/usr/local/bin/ilagent"
 
 if [ "$(uname)" == "Darwin" ]; then
 
+  INSTALL_URI="/usr/local/bin/ilagent"
   FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_mac"
   rm $INSTALL_URI || true
   echo "[MacOS] Downloading binary.. please be patient."
@@ -22,6 +22,7 @@ if [ "$(uname)" == "Darwin" ]; then
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
 
   if [ "$(expr substr $(uname -m) 1 3)" == "arm" ]; then
+    INSTALL_URI="/usr/bin/ilagent"
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_arm"
     rm $INSTALL_URI || true
     echo "[ARM] Downloading binary.. please be patient."
@@ -30,6 +31,7 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     echo "Done"
     ilagent --help
   else
+    INSTALL_URI="/usr/bin/ilagent"
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_linux"
     rm $INSTALL_URI || true
     echo "[Linux] Downloading binary.. please be patient."

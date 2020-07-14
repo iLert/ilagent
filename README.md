@@ -17,7 +17,7 @@ The iLert agent comes in a single binary and helps you to
 For MacOS and Linux we also provide this one-liner to automatically install the agent:
 
 ```shell script
-curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | sh -
+curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | bash -
 ```
 
 We provide pre compiled binaries for every major OS on the [release page of this repository](https://github.com/iLert/ilagent/releases).
