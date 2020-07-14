@@ -12,7 +12,13 @@ The iLert agent comes in a single binary and helps you to
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
 
-## Downloading // Installing
+## Downloading / Installing
+
+For MacOS and Linux we also provide this one-liner to automatically install the agent:
+
+```shell script
+curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | sh -
+```
 
 We provide pre compiled binaries for every major OS on the [release page of this repository](https://github.com/iLert/ilagent/releases).
 
@@ -23,12 +29,6 @@ Grab your version
 - [Mac x86_64](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_mac)
 - [ARM (gnueabihf)](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_arm)
 - [Others][issues]
-
-For MacOS and Linux we also provide this one-liner to automatically install the agent
-
-```shell script
-curl -o- https://raw.githubusercontent.com/iLert/ilagent/0.2.0/install.sh | bash
-```
 
 ### Cross compiling
 
@@ -62,7 +62,7 @@ We are happy to respond to [GitHub issues][issues] as well.
 #### License
 
 <sup>
-Licensed under either of <a href="LICENSE">Apache License, Version2.0</a>
+Licensed under <a href="LICENSE">Apache License, Version 2.0</a>
 </sup>
 
 [issues]: https://github.com/iLert/ilagent/issues/new
