@@ -7,7 +7,7 @@ use std::sync::Arc;
 use clap::{Arg, App, ArgMatches};
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventApiResource};
+use ilert::ilert_builders::{EventApiResource, EventImage, EventLink};
 
 mod il_config;
 use il_config::ILConfig;
@@ -83,6 +83,47 @@ fn main() -> () {
              .takes_value(true)
             )
 
+        .arg(Arg::with_name("priority")
+            .short("o")
+            .long("priority")
+            .value_name("PRIORITY")
+            .help("Sets the event priority for the 'event' command")
+            .possible_values(&["LOW", "HIGH"])
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("image")
+            .short("g")
+            .long("image")
+            .value_name("IMAGE")
+            .help("Sets the event image url for the 'event' command")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("details")
+            .short("d")
+            .long("details")
+            .value_name("DETAIL")
+            .help("Sets the event detail for the 'event' command")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("link")
+            .short("l")
+            .long("link")
+            .value_name("LINK")
+            .help("Sets the event link for the 'event' command")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("file")
+            .short("f")
+            .long("file")
+            .value_name("FILE")
+            .help("Provides the file path for the SQLite database (default: ./ilagent.db3)")
+            .takes_value(true)
+        )
+
         .arg(Arg::with_name("incident_key")
             .short("i")
             .long("incident_key")
@@ -138,7 +179,6 @@ fn main() -> () {
             .help("Sets the level of verbosity")
             )
 
-        // TODO: arg to override sqlite db location
         // TODO: arg to override ilert_client host -> enables potential call to ilagent deployments
 
         .get_matches();
@@ -179,6 +219,11 @@ fn main() -> () {
         config.mqtt_name = Some(mqtt_name.to_string());
         config.mqtt_event_topic = Some(mqtt_event_topic.to_string());
         config.mqtt_heartbeat_topic = Some(mqtt_heartbeat_topic.to_string());
+    }
+
+    let db_file = matches.value_of("file");
+    if let Some(file) = db_file {
+        config.db_file = file.to_string();
     }
 
     env_logger::from_env(Env::default()
@@ -274,10 +319,57 @@ fn run_event(config: &ILConfig, matches: &ArgMatches) -> () {
         None => None
     };
 
-    // TODO: add more usefull fields e.g. priority, images?
+    let priority = matches.value_of("priority");
+    let priority = match priority {
+        Some(k) => Some(k.to_string()),
+        None => None
+    };
 
-    let mut event = EventQueueItem::new_with_required(api_key, event_type, summary, incident_key);
+    let details = matches.value_of("details");
+    let details = match details {
+        Some(k) => Some(k.to_string()),
+        None => None
+    };
+
+    let mut images = None;
+    let image = matches.value_of("image");
+    if let Some(val) = image {
+        let vec = vec!(EventImage::new(val));
+        let j = serde_json::to_string(&vec);
+        images = match j {
+            Ok(v) => Some(v),
+            Err(e) => {
+                error!("Failed to parse image {}", e);
+                None
+            }
+        };
+    }
+
+    let mut links = None;
+    let link = matches.value_of("link");
+    if let Some(val) = link {
+        let mut e_link = EventLink::new(val);
+        e_link.text = Some("Provided Url".to_string());
+        let vec = vec!(e_link);
+        let j = serde_json::to_string(&vec);
+        links = match j {
+            Ok(v) => Some(v),
+            Err(e) => {
+                error!("Failed to parse link {}", e);
+                None
+            }
+        };
+    }
+
+    let mut event = EventQueueItem::new_with_required(
+        api_key, event_type, summary, incident_key);
+
     event.id = Some("provided".to_string()); // prettier logs
+    event.priority = priority;
+    event.details = details;
+    event.images = images;
+    event.links = links;
+
     il_poll::process_queued_event(&ilert_client, &event);
 }
 

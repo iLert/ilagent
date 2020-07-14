@@ -1,2 +1,6 @@
 #!/bin/bash
-cargo run -- event -v -v -k il1ins0620d12334650aec412a3872867c63 -t ALERT -s 'a summary from the shell' -i bla123
+cargo run -- event -v -v \
+  -k il1insada3872867c63 -t ALERT -s 'a summary from the shell' -i bla123 \
+  -o LOW -d 'some details on the incident' \
+  -g 'https://www.ilert.com/blog/2020-04-30-christian-froehlingsdorf-joins-as-cto/cto-profile-teaser-2.png' \
+  -l 'https://docs.ilert.com/alertsource-throttle'
