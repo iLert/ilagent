@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+set -e
+if [ -z "${DEBUG}" ]; then
+  set +o xtrace
+else
+  set -o xtrace
+fi
 
 INSTALL_URI="/usr/local/bin/ilagent"
 
