@@ -6,26 +6,39 @@ else
   set -o xtrace
 fi
 
+VERSION="0.2.0"
 INSTALL_URI="/usr/local/bin/ilagent"
 
 if [ "$(uname)" == "Darwin" ]; then
 
-  FILE_URL="https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_mac"
+  FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_mac"
   rm $INSTALL_URI || true
+  echo "[MacOS] Downloading binary.. please be patient."
   curl -sL $FILE_URL --output $INSTALL_URI
   chmod 777 $INSTALL_URI
+  echo "Done"
   ilagent --help
 
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
 
-  FILE_URL="https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_linux"
-  rm $INSTALL_URI || true
-  curl -sL $FILE_URL --output $INSTALL_URI
-  chmod 777 $INSTALL_URI
-  ilagent --help
+  if [ "$(expr substr $(uname -m) 1 3)" == "arm" ]; then
+    FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_arm"
+    rm $INSTALL_URI || true
+    echo "[ARM] Downloading binary.. please be patient."
+    curl -sL $FILE_URL --output $INSTALL_URI
+    chmod 777 $INSTALL_URI
+    echo "Done"
+    ilagent --help
+  else
+    FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_linux"
+    rm $INSTALL_URI || true
+    echo "[Linux] Downloading binary.. please be patient."
+    curl -sL $FILE_URL --output $INSTALL_URI
+    chmod 777 $INSTALL_URI
+    echo "Done"
+    ilagent --help
+  fi
 
-elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW32_NT" ]; then
-    echo "Unsupported platform, please install manually."
-elif [ "$(expr substr $(uname -s) 1 10)" == "MINGW64_NT" ]; then
-    echo "Unsupported platform, please install manually."
+else
+  echo "Unsupported platform, please install manually."
 fi
