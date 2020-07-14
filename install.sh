@@ -26,8 +26,8 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_arm"
     rm $INSTALL_URI || true
     echo "[ARM] Downloading binary.. please be patient."
-    curl -sL $FILE_URL --output $INSTALL_URI
-    chmod 777 $INSTALL_URI
+    sudo curl -sL $FILE_URL --output $INSTALL_URI
+    sudo chmod 777 $INSTALL_URI
     echo "Done"
     ilagent --help
   else
@@ -35,8 +35,8 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_linux"
     rm $INSTALL_URI || true
     echo "[Linux] Downloading binary.. please be patient."
-    curl -sL $FILE_URL --output $INSTALL_URI
-    chmod 777 $INSTALL_URI
+    sudo curl -sL $FILE_URL --output $INSTALL_URI
+    sudo chmod 777 $INSTALL_URI
     echo "Done"
     ilagent --help
   fi
