@@ -52,6 +52,7 @@ to monitor the uptime of the agent.
 - You can adjust the MQTT topics that the proxy is listening on `-e 'ilert/events'` or `-r 'ilert/heartbeats'`
 - Per default the `daemon` mode will start an HTTP server that listens on port `8977`.
 - The agent will buffer events locally using SQLite3 it will therefore require file system access in `daemon` mode.
+- Running detached: `nohup sh -c 'ilagent daemon -m 192.168.1.14 -b il1hbt... -v -v'  > ./ilagent.log 2>&1 &`
 
 You can always run `ilagent --help` or take a look at our [documentation](https://docs.ilert.com/ilagent) for help.
 
