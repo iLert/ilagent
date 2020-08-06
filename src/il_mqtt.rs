@@ -28,6 +28,7 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
     let mqtt_thread = thread::spawn(move || {
 
         let mut connected = false;
+        let mut recon_attempts = 0;
         let ilert_client = ILert::new().expect("Failed to create iLert client");
         let db = ILDatabase::new(config.db_file.as_str());
 
@@ -56,50 +57,69 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
 
         info!("Subscribing to mqtt topics {} and {}", event_topic.as_str(), heartbeat_topic.as_str());
 
-        for (_i, invoke) in connection.iter().enumerate() {
+        loop {
 
-            // will end thread
+            info!("Connecting to Mqtt server..");
+            for (_i, invoke) in connection.iter().enumerate() {
+
+                // will end thread
+                if !are_we_running.load(Ordering::SeqCst) {
+                    break;
+                }
+
+                match invoke {
+                    Err(e) => {
+                        error!("mqtt error {}", e);
+                        connected = false;
+                        // this will likely kill the mqtt stream, parent loop will reconnect
+                        continue;
+                    },
+                    _ => ()
+                };
+
+                if !connected {
+                    connected = true;
+                    recon_attempts = 0;
+                    info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
+                }
+
+                let (inc, _out) = invoke.unwrap();
+                if inc.is_none() {
+                    continue;
+                }
+
+                match inc.unwrap() {
+                    Incoming::Publish(message) => {
+
+                        let payload = str::from_utf8(&message.payload);
+                        if payload.is_err() {
+                            error!("Failed to decode mqtt payload {:?}", payload);
+                            continue;
+                        }
+                        let payload = payload.unwrap();
+
+                        info!("Received mqtt message {}", message.topic);
+                        if heartbeat_topic == message.topic {
+                            handle_heartbeat_message(&ilert_client, payload);
+                        } else if event_topic == message.topic {
+                            handle_event_message(&db, payload);
+                        }
+                    },
+                    _ => continue
+                }
+            }
+
+            // instant quit
             if !are_we_running.load(Ordering::SeqCst) {
                 break;
             }
 
-            match invoke {
-                Err(e) => {
-                    error!("mqtt error {}", e);
-                    continue;
-                },
-                _ => ()
-            };
-
-            if !connected {
-                connected = true;
-                info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
+            // fallback, in case mqtt connection drops all the time
+            if recon_attempts < 300 {
+                recon_attempts = recon_attempts + 1;
             }
 
-            let (inc, _out) = invoke.unwrap();
-            if inc.is_none() {
-                continue;
-            }
-
-            match inc.unwrap() {
-                Incoming::Publish(message) => {
-
-                    let payload = str::from_utf8(&message.payload);
-                    if payload.is_err() {
-                        error!("Failed to decode mqtt payload {:?}", payload);
-                        continue;
-                    }
-                    let payload = payload.unwrap();
-
-                    info!("Received mqtt message {}", message.topic);
-                    if heartbeat_topic == message.topic {
-                        handle_heartbeat_message(&ilert_client, payload);
-                    } else if event_topic == message.topic {
-                        handle_event_message(&db, payload);
-                    }
-                },
-                _ => continue
-            }
+            thread::sleep(Duration::from_millis(100 * recon_attempts));
         }
     });
 

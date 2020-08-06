@@ -26,10 +26,10 @@ We provide pre compiled binaries for every major OS on the [release page of this
 
 Grab your version
 
-- [Linux x86_64](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_linux)
-- [Windows x86_64](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent.exe)
-- [Mac x86_64](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_mac)
-- [ARM (gnueabihf)](https://github.com/iLert/ilagent/releases/download/0.2.0/ilagent_arm)
+- [Linux x86_64](https://github.com/iLert/ilagent/releases/download/0.2.1/ilagent_linux)
+- [Windows x86_64](https://github.com/iLert/ilagent/releases/download/0.2.1/ilagent.exe)
+- [Mac x86_64](https://github.com/iLert/ilagent/releases/download/0.2.1/ilagent_mac)
+- [ARM (gnueabihf)](https://github.com/iLert/ilagent/releases/download/0.2.1/ilagent_arm)
 - [Others][issues]
 
 ### Cross compiling
