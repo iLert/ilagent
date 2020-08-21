@@ -42,7 +42,8 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
 
         mqtt_options
             .set_keep_alive(5)
-            .set_throttle(Duration::from_secs(1));
+            .set_throttle(Duration::from_secs(1))
+            .set_clean_session(false);
 
         let (mut client, mut connection) = Client::new(mqtt_options, 10);
 
