@@ -23,7 +23,7 @@ fn main() -> () {
 
     let matches = App::new("iLert Agent")
 
-        .version("0.2.1")
+        .version("0.2.2")
         .author("iLert GmbH. <support@ilert.com>")
         .about("The iLert Agent 🦀 📦 is a program that lets you easily integrate your monitoring system with iLert.")
 

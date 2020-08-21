@@ -128,7 +128,7 @@ struct WebContextContainer {
 fn get_index(_req: HttpRequest) -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.2.1")
+        .body("ilagent/0.2.2")
 }
 
 fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
