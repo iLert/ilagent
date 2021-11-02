@@ -42,6 +42,7 @@ Requires cross (`cargo install cross`) to be installed.
 - Linux: `cross build --release --target x86_64-unknown-linux-gnu`
 - Windows: `cross build --release --target x86_64-pc-windows-gnu`
 - ARM: `cross build --release --target arm-unknown-linux-gnueabihf`
+- All `cargo build --release && cross build --release --target x86_64-unknown-linux-gnu && cross build --release --target x86_64-pc-windows-gnu && cross build --release --target arm-unknown-linux-gnueabihf`
 
 ## Quick gimmicks
 
