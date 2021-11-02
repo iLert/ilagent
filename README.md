@@ -2,7 +2,7 @@
 
 The iLert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with iLert.
 
-<sup>Super small footprint (13MB container, that consumes about 2MB! of RAM)</sup>
+<sup>Super small footprint (20MB container, that consumes about 5MB! of RAM)</sup>
 
 ## iLert agent
 
