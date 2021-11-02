@@ -1,6 +1,7 @@
 # ilagent
 
 The iLert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with iLert.
+<sup>Super small footprint (13MB container, that consumes about 2MB! of RAM)</sup>
 
 ## iLert agent
 
@@ -11,17 +12,29 @@ The iLert agent comes in a single binary and helps you to
 * Monitor a host with regular heartbeats `ilagent daemon -b il1insada3872867c63`
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
-* Map and filter your MQTT events to alerts
+* Map and filter your MQTT events to alerts [see](#mapping-mqtt-events)
 
 <p align="center"><img src="/demo.gif?raw=true"/></p>
 
 ## Downloading / Installing
+
+### Docker image
+
+You can grab the latest release from [Docker hub](https://hub.docker.com/r/ilert/ilagent)
+
+```shell script
+docker run ilert/ilagent
+```
+
+### Install script
 
 For MacOS and Linux we also provide this one-liner to automatically install the agent:
 
 ```shell script
 curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | bash -
 ```
+
+### Pre-build releases
 
 We provide pre compiled binaries for every major OS on the [release page of this repository](https://github.com/iLert/ilagent/releases).
 
@@ -33,12 +46,12 @@ Grab your version
 - [ARM (gnueabihf)](https://github.com/iLert/ilagent/releases/download/0.3.0/ilagent_arm)
 - [Others][issues]
 
-### Cross compiling
+### Compiling
 
 Of course you can also grab the source code and compile it yourself.
 Requires cross (`cargo install cross`) to be installed.
 
-- Mac: `cargo build --release`
+- Mac (Host): `cargo build --release`
 - Linux: `cross build --release --target x86_64-unknown-linux-gnu`
 - Windows: `cross build --release --target x86_64-pc-windows-gnu`
 - ARM: `cross build --release --target arm-unknown-linux-gnueabihf`

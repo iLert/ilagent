@@ -1,0 +1,8 @@
+.github
+.idea
+target/
+test/
+CHANGELOG.md
+demo.gif
+install.sh
+*.db3

@@ -1,8 +1,11 @@
-FROM rust:1.56 AS builder
-WORKDIR /usr/src/ilagent
-COPY . .
-RUN cargo install --path .
+FROM ekidd/rust-musl-builder AS builder
+ADD . ./
+RUN sudo chown -R rust:rust /home/rust/src
+RUN cargo build --release
+RUN strip /home/rust/src/target/x86_64-unknown-linux-musl/release/ilagent
 
-FROM alpine
-COPY --from=builder /usr/local/cargo/bin/ilagent /usr/local/bin/ilagent
-CMD ["ilagent"]
+FROM scratch AS runner
+COPY --from=builder /home/rust/src/target/x86_64-unknown-linux-musl/release/ilagent \
+  /ilagent
+
+ENTRYPOINT ["./ilagent"]
