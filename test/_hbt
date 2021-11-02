@@ -1,2 +1,2 @@
 #!/bin/bash
-cargo run -- heartbeat -v -v -a aksdkjasdkasjdlasjjasdlsajkl
+cargo run -- heartbeat -v -v -k aksdkjasdkasjdlasjjasdlsajkl

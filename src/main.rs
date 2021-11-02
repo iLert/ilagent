@@ -3,6 +3,8 @@ use env_logger::Env;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use clap::{Arg, App, ArgMatches};
+use std::panic;
+use std::process;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
@@ -38,7 +40,7 @@ fn main() -> () {
             .short("p")
             .long("port")
             .value_name("PORT")
-            .help("Sets a custom port for the daemon's http server")
+            .help("Sets a port for the daemon's http server, the server is not started, unless a port is provided")
             .takes_value(true)
             )
 
@@ -201,10 +203,10 @@ fn main() -> () {
             .takes_value(true)
         )
 
-        .arg(Arg::with_name("mqtt_map_val_etype_create")
-            .long("mqtt_map_val_etype_create")
-            .value_name("MQTT_MAP_VAL_ETYPE_CREATE")
-            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'CREATED'")
+        .arg(Arg::with_name("mqtt_map_val_etype_alert")
+            .long("mqtt_map_val_etype_alert")
+            .value_name("MQTT_MAP_VAL_ETYPE_ALERT")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ALERT'")
             .takes_value(true)
         )
 
@@ -241,6 +243,8 @@ fn main() -> () {
     let mut config = ILConfig::new();
 
     let default_port = config.get_port_as_string().clone();
+    // http server is only started if the port is provided
+    config.start_http = matches.is_present("port");
     let port = matches.value_of("port").unwrap_or(default_port.as_str());
     config.set_port_from_str(port);
 
@@ -256,6 +260,10 @@ fn main() -> () {
             "debug"
         }
     };
+
+    env_logger::from_env(Env::default()
+        .default_filter_or(log_level))
+        .init();
 
     if matches.is_present("heartbeat") {
         let heartbeat_key = matches.value_of("heartbeat").expect("Failed to parse heartbeat api key");
@@ -307,9 +315,9 @@ fn main() -> () {
             info!("Overwrite for payload key 'summary' has been configured: '{:?}'", config.mqtt_map_key_summary);
         }
 
-        if matches.is_present("mqtt_map_val_etype_create") {
-            config.mqtt_map_val_etype_create = Some(matches.value_of("mqtt_map_val_etype_create").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_create").to_string());
-            info!("Overwrite for payload val of key 'eventType' and default: 'CREATE' has been configured: '{:?}'", config.mqtt_map_val_etype_create);
+        if matches.is_present("mqtt_map_val_etype_alert") {
+            config.mqtt_map_val_etype_alert = Some(matches.value_of("mqtt_map_val_etype_alert").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_alert").to_string());
+            info!("Overwrite for payload val of key 'eventType' and default: 'ALERT' has been configured: '{:?}'", config.mqtt_map_val_etype_alert);
         }
 
         if matches.is_present("mqtt_map_val_etype_accept") {
@@ -328,10 +336,6 @@ fn main() -> () {
         config.db_file = file.to_string();
     }
 
-    env_logger::from_env(Env::default()
-        .default_filter_or(log_level))
-        .init();
-
     debug!("Running command: {}.", command);
     match command {
         "daemon" => run_daemon(&config),
@@ -342,27 +346,47 @@ fn main() -> () {
 }
 
 /**
-    Starts http server with proxy functionality /api/v1/events and /api/v1/heartbeats
+    If port is provided starts an http server with proxy functionality /api/events and /api/heartbeats
     Where events are queued in a local SQLite table to ensure delivery
     If provided, pings a heartbeat api key regularly
     If provided, connects to MQTT broker and proxies events (through queue) and heartbeats
+    If http server or mqtt client is started will also spawn a poll thread to poll the db
 */
 fn run_daemon(config: &ILConfig) -> () {
+
+    // in case a thread (like mqtt or poll) dies of a panic
+    // we want to make sure the whole program exits
+    let orig_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        orig_hook(panic_info);
+        process::exit(1);
+    }));
 
     let are_we_running = Arc::new(AtomicBool::new(true));
     let are_we_running_trigger = are_we_running.clone();
     ctrlc::set_handler(move || {
-        info!("Received Ctrl+C.");
+        info!("Received Ctrl+C. Shutting down...");
         are_we_running_trigger.store(false, Ordering::SeqCst);
     }).expect("Error setting Ctrl-C handler");
 
     info!("Starting..");
-    let db_web_instance = ILDatabase::new(config.db_file.as_str());
-    info!("Migrating DB..");
-    db_web_instance.prepare_database();
+    let is_poll_needed = config.mqtt_host.is_some() || config.start_http;
 
-    info!("Starting poll job..");
-    let poll_job = il_poll::run_poll_job(&config, &are_we_running);
+    // db is always spawned and migrated up first here in case poll job is active
+    let mut db_web_instance = None;
+    if is_poll_needed {
+        let db = ILDatabase::new(config.db_file.as_str());
+        info!("Migrating DB..");
+        db.prepare_database();
+        db_web_instance = Some(db);
+    }
+
+    // poll is only needed if mqtt or web server are running
+    let mut poll_job = None;
+    if is_poll_needed {
+        info!("Starting poll job..");
+        poll_job = Some(il_poll::run_poll_job(&config, &are_we_running));
+    }
 
     let mut hbt_job = None;
     if config.heartbeat_key.is_some() {
@@ -376,11 +400,16 @@ fn run_daemon(config: &ILConfig) -> () {
         mqtt_job = Some(il_mqtt::run_mqtt_job(&config, &are_we_running))
     }
 
-    info!("Starting server..");
-    il_server::run_server(&config, db_web_instance).expect("Failed to start http server");
-    // blocking..
+    if config.start_http {
+        info!("Starting server..");
+        il_server::run_server(&config, db_web_instance.expect("db instance is needed for http server"))
+            .expect("Failed to start http server");
+        // blocking..
+    }
 
-    poll_job.join().expect("Failed to join poll thread");
+    if let Some(handle) = poll_job {
+        handle.join().expect("Failed to join poll thread");
+    }
 
     if let Some(handle) = hbt_job {
         handle.join().expect("Failed to join heartbeat thread");

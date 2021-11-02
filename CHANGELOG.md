@@ -1,8 +1,11 @@
 # ilagent CHANGELOG
 
-## 2021-11-01, Version 0.3.0
+## 2021-11-02, Version 0.3.0
 
 * **BREAKING** --incident_key is now --alert_key (-i is still available)
+* **BREAKING** http server is not started unless --p is provided
+* **BREAKING** migrated to new API /api/v1/events -> /api/events
+* if one of the threads exit, the whole program will exit
 * moved to ilert-rust@2.0.0, will migrated incident_key -> alert_key in code and db
 * added event mapping keys to map mqtt payloads to event api
 * added event filter keys to filter mqtt payloads

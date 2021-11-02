@@ -2,6 +2,7 @@
 pub struct ILConfig {
     pub http_host: String,
     pub http_port: i32,
+    pub start_http: bool,
     pub http_worker_count: i8,
     pub db_file: String,
     pub heartbeat_key: Option<String>,
@@ -11,12 +12,12 @@ pub struct ILConfig {
     pub mqtt_event_topic: Option<String>,
     pub mqtt_heartbeat_topic: Option<String>,
 
-    pub mqtt_event_key: Option<String>, // static key to pass on events as apiKey
+    pub mqtt_event_key: Option<String>,
     pub mqtt_map_key_etype: Option<String>,
     pub mqtt_map_key_alert_key: Option<String>,
     pub mqtt_map_key_summary: Option<String>,
 
-    pub mqtt_map_val_etype_create: Option<String>,
+    pub mqtt_map_val_etype_alert: Option<String>,
     pub mqtt_map_val_etype_accept: Option<String>,
     pub mqtt_map_val_etype_resolve: Option<String>,
 
@@ -30,6 +31,7 @@ impl ILConfig {
         ILConfig {
             http_host: "0.0.0.0".to_string(),
             http_port: 8977,
+            start_http: false,
             http_worker_count: 2,
             db_file: "./ilagent.db3".to_string(),
             heartbeat_key: None,
@@ -42,7 +44,7 @@ impl ILConfig {
             mqtt_map_key_etype: None,
             mqtt_map_key_alert_key: None,
             mqtt_map_key_summary: None,
-            mqtt_map_val_etype_create: None,
+            mqtt_map_val_etype_alert: None,
             mqtt_map_val_etype_accept: None,
             mqtt_map_val_etype_resolve: None,
             mqtt_filter_key: None,

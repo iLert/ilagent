@@ -1,6 +1,6 @@
 use std::thread;
 use std::thread::JoinHandle;
-use log::{debug, info, error};
+use log::{debug, info, warn, error};
 use std::time::{Duration};
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde_derive::{Deserialize, Serialize};
@@ -159,7 +159,7 @@ fn parse_event_json(config: &ILConfig, payload: &str, topic: &str) -> Option<Eve
     // raw parse
     let json : serde_json::Result<serde_json::Value> = serde_json::from_str(payload);
     if json.is_err() {
-        error!("Invalid mqtt event payload json {}", json.unwrap_err());
+        warn!("Invalid mqtt event payload json {}", json.unwrap_err());
         return None;
     }
     let json = json.unwrap();
@@ -231,8 +231,8 @@ fn parse_event_json(config: &ILConfig, payload: &str, topic: &str) -> Option<Eve
         }
     }
 
-    if let Some(mqtt_map_val_etype_create) = config.mqtt_map_val_etype_create {
-        if mqtt_map_val_etype_create.eq(event_type.as_str()) {
+    if let Some(mqtt_map_val_etype_alert) = config.mqtt_map_val_etype_alert {
+        if mqtt_map_val_etype_alert.eq(event_type.as_str()) {
             parsed.eventType = Some(ILertEventType::ALERT.as_str().to_string());
         }
     }

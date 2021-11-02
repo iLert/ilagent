@@ -1,11 +1,11 @@
 #!/bin/bash
-cargo run -- daemon -p 8977 -v -v -v \
-    -m 127.0.0.1 -q 1883 -n ilbro -e '#' \
+cargo run -- daemon -v -v \
+    -m 127.0.0.1 -q 1883 -n ilagent -e '#' \
     --mqtt_event_key 'il1api112115xxx' \
     --mqtt_map_key_alert_key 'mCode' \
     --mqtt_map_key_summary 'comment' \
     --mqtt_map_key_etype 'state' \
-    --mqtt_map_val_etype_create 'SET' \
+    --mqtt_map_val_etype_alert 'SET' \
     --mqtt_map_val_etype_accept 'ACK' \
     --mqtt_map_val_etype_resolve 'CLR' \
     --mqtt_filter_key 'type' \

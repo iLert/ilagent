@@ -159,7 +159,7 @@ struct WebContextContainer {
 fn get_index(_req: HttpRequest) -> HttpResponse {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.2.2")
+        .body("ilagent/0.3.0")
 }
 
 fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
@@ -230,11 +230,11 @@ fn config_app(cfg: &mut web::ServiceConfig) {
                     .route(web::get().to(get_index)) // /
     );
 
-    cfg.service(web::resource("/api/v1/events")
+    cfg.service(web::resource("/api/events")
                     .route(web::post().to(post_event)) // POST
     );
 
-    cfg.service(web::resource("/api/v1/heartbeats/{id}")
+    cfg.service(web::resource("/api/heartbeats/{id}")
                     .route(web::get().to(get_heartbeat)) // GET for api key
                     // .route(web::delete().to(delete_check))
     );
