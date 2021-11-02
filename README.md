@@ -1,6 +1,6 @@
 # ilagent
 
-The iLert Agent 🦀 📦 is a program that lets you easily integrate your monitoring system with iLert.
+The iLert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with iLert.
 
 ## iLert agent
 
