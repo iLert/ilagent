@@ -23,7 +23,7 @@ fn main() -> () {
 
     let matches = App::new("iLert Agent")
 
-        .version("0.2.2")
+        .version("0.3.0")
         .author("iLert GmbH. <support@ilert.com>")
         .about("The iLert Agent 🦀 📦 is a program that lets you easily integrate your monitoring system with iLert.")
 
@@ -116,11 +116,11 @@ fn main() -> () {
             .takes_value(true)
         )
 
-        .arg(Arg::with_name("incident_key")
+        .arg(Arg::with_name("alert_key")
             .short("i")
-            .long("incident_key")
-            .value_name("INCIDENT_KEY")
-            .help("Sets the event incident key for the 'event' command")
+            .long("alert_key")
+            .value_name("ALERT_KEY")
+            .help("Sets the event alert key for the 'event' command")
             .takes_value(true)
         )
 
@@ -171,7 +171,70 @@ fn main() -> () {
             .help("Sets the level of verbosity")
             )
 
-        // TODO: arg to override ilert_client host -> enables potential call to ilagent deployments
+        /* ### mqtt overwrites ### */
+
+        .arg(Arg::with_name("mqtt_event_key")
+            .long("mqtt_event_key")
+            .value_name("MQTT_EVENT_KEY")
+            .help("If provided under daemon command, overwrites all events with apiKey")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_key_etype")
+            .long("mqtt_map_key_etype")
+            .value_name("MQTT_MAP_KEY_ETYPE")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'eventType'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_key_alert_key")
+            .long("mqtt_map_key_alert_key")
+            .value_name("MQTT_MAP_KEY_ALERT_KEY")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'alertKey'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_key_summary")
+            .long("mqtt_map_key_summary")
+            .value_name("MQTT_MAP_KEY_SUMMARY")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'summary'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_val_etype_create")
+            .long("mqtt_map_val_etype_create")
+            .value_name("MQTT_MAP_VAL_ETYPE_CREATE")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'CREATED'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_val_etype_accept")
+            .long("mqtt_map_val_etype_accept")
+            .value_name("MQTT_MAP_VAL_ETYPE_ACCEPT")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ACCEPT'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_map_val_etype_resolve")
+            .long("mqtt_map_val_etype_resolve")
+            .value_name("MQTT_MAP_VAL_ETYPE_RESOLVE")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'RESOLVE'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_filter_key")
+            .long("mqtt_filter_key")
+            .value_name("MQTT_FILTER_KEY")
+            .help("If provided under daemon command, requires given key in JSON payload")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_filter_val")
+            .long("mqtt_filter_val")
+            .value_name("MQTT_FILTER_VAL")
+            .help("If provided under daemon command, along with 'mqtt_filter_key' requires certain value of JSON payload property")
+            .takes_value(true)
+        )
 
         .get_matches();
 
@@ -200,6 +263,7 @@ fn main() -> () {
     }
 
     if matches.is_present("mqtt_host") {
+
         let mqtt_host = matches.value_of("mqtt_host").unwrap_or("127.0.0.1");
         let mqtt_port_str = matches.value_of("mqtt_port").unwrap_or("1883");
         let mqtt_name = matches.value_of("mqtt_name").unwrap_or("ilagent");
@@ -211,6 +275,52 @@ fn main() -> () {
         config.mqtt_name = Some(mqtt_name.to_string());
         config.mqtt_event_topic = Some(mqtt_event_topic.to_string());
         config.mqtt_heartbeat_topic = Some(mqtt_heartbeat_topic.to_string());
+
+        if matches.is_present("mqtt_filter_key") {
+            config.mqtt_filter_key = Some(matches.value_of("mqtt_filter_key").expect("failed to parse mqtt mapping key: mqtt_filter_key").to_string());
+            info!("Filter key is present: {:?} will be required in event payloads", config.mqtt_filter_key);
+        }
+
+        if matches.is_present("mqtt_filter_val") {
+            config.mqtt_filter_val = Some(matches.value_of("mqtt_filter_val").expect("failed to parse mqtt mapping key: mqtt_filter_val").to_string());
+            info!("Filter key value is present, will be required in event payloads");
+        }
+
+        // mappings
+        if matches.is_present("mqtt_event_key") {
+            config.mqtt_event_key = Some(matches.value_of("mqtt_event_key").expect("failed to parse mqtt mapping key: mqtt_event_key").to_string());
+            info!("eventKey has been configured, overwriting events with static key");
+        }
+
+        if matches.is_present("mqtt_map_key_etype") {
+            config.mqtt_map_key_etype = Some(matches.value_of("mqtt_map_key_etype").expect("failed to parse mqtt mapping key: mqtt_map_key_etype").to_string());
+            info!("Overwrite for payload key 'eventType' has been configured: '{:?}'", config.mqtt_map_key_etype);
+        }
+
+        if matches.is_present("mqtt_map_key_alert_key") {
+            config.mqtt_map_key_alert_key = Some(matches.value_of("mqtt_map_key_alert_key").expect("failed to parse mqtt mapping key: mqtt_map_key_alert_key").to_string());
+            info!("Overwrite for payload key 'alertKey' has been configured: '{:?}'", config.mqtt_map_key_alert_key);
+        }
+
+        if matches.is_present("mqtt_map_key_summary") {
+            config.mqtt_map_key_summary = Some(matches.value_of("mqtt_map_key_summary").expect("failed to parse mqtt mapping key: mqtt_map_key_summary").to_string());
+            info!("Overwrite for payload key 'summary' has been configured: '{:?}'", config.mqtt_map_key_summary);
+        }
+
+        if matches.is_present("mqtt_map_val_etype_create") {
+            config.mqtt_map_val_etype_create = Some(matches.value_of("mqtt_map_val_etype_create").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_create").to_string());
+            info!("Overwrite for payload val of key 'eventType' and default: 'CREATE' has been configured: '{:?}'", config.mqtt_map_val_etype_create);
+        }
+
+        if matches.is_present("mqtt_map_val_etype_accept") {
+            config.mqtt_map_val_etype_accept = Some(matches.value_of("mqtt_map_val_etype_accept").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_accept").to_string());
+            info!("Overwrite for payload val of key 'eventType' and default: 'ACCEPT' has been configured: '{:?}'", config.mqtt_map_val_etype_accept);
+        }
+
+        if matches.is_present("mqtt_map_val_etype_resolve") {
+            config.mqtt_map_val_etype_resolve = Some(matches.value_of("mqtt_map_val_etype_resolve").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_resolve").to_string());
+            info!("Overwrite for payload val of key 'eventType' and default: 'RESOLVE' has been configured: '{:?}'", config.mqtt_map_val_etype_resolve);
+        }
     }
 
     let db_file = matches.value_of("file");
@@ -305,8 +415,8 @@ fn run_event(matches: &ArgMatches) -> () {
     let event_type = matches.value_of("event_type").unwrap();
     let summary = matches.value_of("summary").unwrap();
 
-    let incident_key = matches.value_of("incident_key");
-    let incident_key = match incident_key {
+    let alert_key = matches.value_of("alert_key");
+    let alert_key = match alert_key {
         Some(k) => Some(k.to_string()),
         None => None
     };
@@ -354,7 +464,7 @@ fn run_event(matches: &ArgMatches) -> () {
     }
 
     let mut event = EventQueueItem::new_with_required(
-        api_key, event_type, summary, incident_key);
+        api_key, event_type, summary, alert_key);
 
     event.id = Some("provided".to_string()); // prettier logs
     event.priority = priority;

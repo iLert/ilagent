@@ -1,7 +1,7 @@
 [package]
 name = "ilagent"
-version = "0.2.2"
-authors = ["Chris Froehlingsdorf <cff@ilert.de>"]
+version = "0.3.0"
+authors = ["Chris Froehlingsdorf <chris@ilert.com>"]
 edition = "2018"
 
 [dependencies]
@@ -16,10 +16,10 @@ reqwest = "0.9.20"
 chrono = "0.4.9"
 ctrlc = "3.1.3"
 clap = "2"
-ilert = "1.0.0"
+ilert = "2.0.0"
 uuid = { version = "0.8", features = ["v4"] }
 rumqttc = "0.0.4"
 
 [dependencies.rusqlite]
-version = "0.20.0"
+version = "0.26.0" # SQLite 3.36.0
 features = ["bundled"]

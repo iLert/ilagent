@@ -11,6 +11,7 @@ The iLert agent comes in a single binary and helps you to
 * Monitor a host with regular heartbeats `ilagent daemon -b il1insada3872867c63`
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
+* Map and filter your MQTT events to alerts
 
 <p align="center"><img src="/demo.gif?raw=true"/></p>
 
@@ -56,6 +57,26 @@ to monitor the uptime of the agent.
 
 You can always run `ilagent --help` or take a look at our [documentation](https://docs.ilert.com/ilagent) for help.
 
+## Mapping MQTT events
+
+```
+     \
+    --mqtt_event_key 'il1api112115xxx' \
+    --mqtt_map_key_alert_key 'mCode' \
+    --mqtt_map_key_summary 'comment' \
+    --mqtt_map_key_etype 'state' \
+    --mqtt_map_val_etype_create 'SET' \
+    --mqtt_map_val_etype_accept 'ACK' \
+    --mqtt_map_val_etype_resolve 'CLR' \
+    --mqtt_filter_key 'type' \
+    --mqtt_filter_val 'ALARM'
+```
+
+After connecting to your MQTT broker or proxy using `-m 127.0.0.1 -q 1883 -n ilagent`
+you may specify the MQTT topic that should be used to listen for events for `-e 'ilert/events'`.
+
+
+
 ## Getting help
 
 We are happy to respond to [GitHub issues][issues] as well.
@@ -66,6 +87,8 @@ We are happy to respond to [GitHub issues][issues] as well.
 
 <sup>
 Licensed under <a href="LICENSE">Apache License, Version 2.0</a>
+Note that, depending on the usage of ilagent, it bundles SQLite and other libraries which might have different licenses
+you can read more about them [here](https://github.com/rusqlite/rusqlite#license)
 </sup>
 
 [issues]: https://github.com/iLert/ilagent/issues/new

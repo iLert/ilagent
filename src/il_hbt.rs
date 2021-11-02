@@ -32,7 +32,7 @@ pub fn run_hbt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinH
                 break;
             }
 
-            if last_run.elapsed().as_millis() < 50000 {
+            if last_run.elapsed().as_millis() < 30000 {
                 continue;
             } else {
                 last_run = Instant::now();

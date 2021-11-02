@@ -19,7 +19,24 @@ pub struct EventQueueItemJson {
     pub eventType: String,
     pub summary: String,
     pub details: Option<String>,
-    pub incidentKey: Option<String>,
+    pub alertKey: Option<String>,
+    pub priority: Option<String>,
+    pub images: Option<Vec<EventImage>>,
+    pub links: Option<Vec<EventLink>>,
+    pub customDetails: Option<serde_json::Value>
+}
+
+/**
+    helper to apply additional mqtt mappings easier
+*/
+#[allow(non_snake_case)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EventQueueTransitionItemJson {
+    pub apiKey: Option<String>,
+    pub eventType: Option<String>,
+    pub summary: Option<String>,
+    pub details: Option<String>,
+    pub alertKey: Option<String>,
     pub priority: Option<String>,
     pub images: Option<Vec<EventImage>>,
     pub links: Option<Vec<EventLink>>,
@@ -27,6 +44,20 @@ pub struct EventQueueItemJson {
 }
 
 impl EventQueueItemJson {
+
+    pub fn from_transition(trans: EventQueueTransitionItemJson) -> EventQueueItemJson {
+        EventQueueItemJson {
+            apiKey: trans.apiKey.expect("failed to map required event queue item key: apiKey"),
+            eventType: trans.eventType.expect("failed to map required event queue item key: eventType"),
+            summary: trans.summary.unwrap_or("".to_string()), // field is optional for some event types
+            details: trans.details,
+            alertKey: trans.alertKey,
+            priority: trans.priority,
+            images: trans.images,
+            links: trans.links,
+            customDetails: trans.customDetails
+        }
+    }
 
     pub fn to_db(item: EventQueueItemJson) -> EventQueueItem {
 
@@ -61,7 +92,7 @@ impl EventQueueItemJson {
             id: None,
             api_key: item.apiKey,
             event_type: item.eventType,
-            incident_key: item.incidentKey,
+            alert_key: item.alertKey,
             summary: item.summary,
             details: item.details,
             created_at: None,
@@ -112,7 +143,7 @@ impl EventQueueItemJson {
              eventType: item.event_type,
              summary: item.summary,
              details: item.details,
-             incidentKey: item.incident_key,
+             alertKey: item.alert_key,
              priority: item.priority,
              images,
              links,

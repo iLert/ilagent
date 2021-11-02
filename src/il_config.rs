@@ -9,7 +9,19 @@ pub struct ILConfig {
     pub mqtt_port: Option<u16>,
     pub mqtt_name: Option<String>,
     pub mqtt_event_topic: Option<String>,
-    pub mqtt_heartbeat_topic: Option<String>
+    pub mqtt_heartbeat_topic: Option<String>,
+
+    pub mqtt_event_key: Option<String>, // static key to pass on events as apiKey
+    pub mqtt_map_key_etype: Option<String>,
+    pub mqtt_map_key_alert_key: Option<String>,
+    pub mqtt_map_key_summary: Option<String>,
+
+    pub mqtt_map_val_etype_create: Option<String>,
+    pub mqtt_map_val_etype_accept: Option<String>,
+    pub mqtt_map_val_etype_resolve: Option<String>,
+
+    pub mqtt_filter_key: Option<String>,
+    pub mqtt_filter_val: Option<String>
 }
 
 impl ILConfig {
@@ -25,7 +37,16 @@ impl ILConfig {
             mqtt_port: None,
             mqtt_name: None,
             mqtt_event_topic: None,
-            mqtt_heartbeat_topic: None
+            mqtt_heartbeat_topic: None,
+            mqtt_event_key: None,
+            mqtt_map_key_etype: None,
+            mqtt_map_key_alert_key: None,
+            mqtt_map_key_summary: None,
+            mqtt_map_val_etype_create: None,
+            mqtt_map_val_etype_accept: None,
+            mqtt_map_val_etype_resolve: None,
+            mqtt_filter_key: None,
+            mqtt_filter_val: None
         }
     }
 

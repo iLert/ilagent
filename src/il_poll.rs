@@ -24,7 +24,7 @@ pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
         // thread gets its own db instance, no migrations required
         let db = ILDatabase::new(config.db_file.as_str());
         loop {
-            thread::sleep(Duration::from_millis(300));
+            thread::sleep(Duration::from_millis(250));
             if !are_we_running.load(Ordering::SeqCst) {
                 break;
             }
@@ -35,7 +35,7 @@ pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
                 last_run = Instant::now();
             }
 
-            let items_result = db.get_il_events(50);
+            let items_result = db.get_il_events(20);
             match items_result {
                 Ok(items) => {
                     if !items.is_empty() {
@@ -101,13 +101,14 @@ pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> boo
         .event_with_details(
             event.api_key.as_str(),
             event_type,
-            event.summary.as_str(),
-            event.incident_key.clone(),
+            Some(event.summary.clone()),
+            event.alert_key.clone(),
             event.details.clone(),
             priority,
             parsed_event.images,
             parsed_event.links,
-            parsed_event.customDetails
+            parsed_event.customDetails,
+            None
             )
         .execute();
 
@@ -121,7 +122,7 @@ pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> boo
 
     let status = response.status.as_u16();
 
-    if status == 200 {
+    if status == 202 {
         info!("Event {} post successfully delivered", event_id);
         return false; // default happy case, no retry
     }
@@ -137,5 +138,6 @@ pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> boo
     }
 
     warn!("Event {} post failed bad request rejection {}", event_id, status);
+    error!("Response body: {}", response.body_raw.unwrap_or("No body provided".to_string()));
     false // any other status code e.g. 400, no retry
 }

@@ -1,5 +1,5 @@
 use rusqlite::types::ToSql;
-use rusqlite::{Connection, NO_PARAMS, Row};
+use rusqlite::{Connection, Row};
 use log::{info, error};
 use serde_derive::{Deserialize, Serialize};
 use chrono::prelude::*;
@@ -9,6 +9,7 @@ use ilert::ilert_builders::{ILertEventType};
 
 const DB_MIGRATION_VAL: &str = "1";
 const DB_MIGRATION_V1: &str = "mig_1";
+const DB_MIGRATION_V2: &str = "mig_2";
 
 #[derive(Debug)]
 struct ILAgentItem {
@@ -33,7 +34,7 @@ pub struct EventQueueItem {
     pub id: Option<String>,
     pub api_key: String,
     pub event_type: String,
-    pub incident_key: Option<String>,
+    pub alert_key: Option<String>,
     pub summary: String,
     pub details: Option<String>,
     pub created_at: Option<String>,
@@ -50,7 +51,7 @@ impl EventQueueItem {
             id: None,
             api_key: "".to_string(),
             event_type: ILertEventType::ALERT.as_str().to_string(),
-            incident_key: None,
+            alert_key: None,
             summary: "".to_string(),
             details: None,
             created_at: None,
@@ -62,12 +63,12 @@ impl EventQueueItem {
     }
 
     pub fn new_with_required(api_key: &str, event_type: &str, summary: &str,
-                            incident_key: Option<String>) -> EventQueueItem {
+                             alert_key: Option<String>) -> EventQueueItem {
         EventQueueItem {
             id: None,
             api_key: api_key.to_string(),
             event_type: event_type.to_string(),
-            incident_key,
+            alert_key,
             summary: summary.to_string(),
             details: None,
             created_at: None,
@@ -100,7 +101,7 @@ impl ILDatabase {
                       val                 TEXT NOT NULL,
                       created_at          TEXT NOT NULL
                   )",
-            NO_PARAMS,
+            [],
         ).expect("Failed to bootstrap database");
 
         let mig_1 = self.get_il_value(DB_MIGRATION_V1);
@@ -120,12 +121,30 @@ impl ILDatabase {
                       custom_details     TEXT NULL,
                       details            TEXT NULL
                   )",
-                NO_PARAMS,
-            ).expect("Failed to migrate database");
+                [],
+            ).expect("Database migration failed (v1)");
 
             self.set_il_val(DB_MIGRATION_V1, DB_MIGRATION_VAL)
-                .expect("Database migration failed");
+                .expect("Database migration failed (v1, set)");
             info!("Database migrated to {}", DB_MIGRATION_V1);
+        }
+
+        let mig_2 = self.get_il_value(DB_MIGRATION_V2);
+        if mig_2.is_none() {
+
+            self.conn.execute(
+                "ALTER TABLE event_items RENAME COLUMN incident_key TO alert_key",
+                [],
+            ).expect("Database migration failed (v2, 1)");
+
+            self.conn.execute(
+                "ALTER TABLE event_items ADD COLUMN inserted_at DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))",
+                [],
+            ).expect("Database migration failed (v2, 2)");
+
+            self.set_il_val(DB_MIGRATION_V2, DB_MIGRATION_VAL)
+                .expect("Database migration failed (v2, set)");
+            info!("Database migrated to {}", DB_MIGRATION_V2);
         }
 
         /*
@@ -211,7 +230,7 @@ impl ILDatabase {
             id: row.get(0).unwrap_or(None),
             api_key: row.get(1).unwrap_or("".to_string()),
             event_type: row.get(2).unwrap_or(ILertEventType::ALERT.as_str().to_string()),
-            incident_key: row.get(3).unwrap_or(None),
+            alert_key: row.get(3).unwrap_or(None),
             summary: row.get(4).unwrap_or("".to_string()),
             created_at: row.get(5).unwrap_or(None),
             priority: row.get(6).unwrap_or(None),
@@ -263,7 +282,7 @@ impl ILDatabase {
 
     pub fn get_il_events(&self, limit: i32) -> Result<Vec<EventQueueItem>,  rusqlite::Error> {
 
-        let mut stmt = self.conn.prepare("SELECT * FROM event_items LIMIT ?1").unwrap();
+        let mut stmt = self.conn.prepare("SELECT * FROM event_items ORDER BY inserted_at ASC LIMIT ?1").unwrap();
         let query_result = stmt
             .query_map(&[&limit], |row| {
                 ILDatabase::convert_db_row_to_event(row)
@@ -307,10 +326,10 @@ impl ILDatabase {
         };
 
         let insert_result = self.conn.execute(
-            "INSERT INTO event_items (api_key, event_type, incident_key, summary, created_at, id,
+            "INSERT INTO event_items (api_key, event_type, alert_key, summary, created_at, id,
                 priority, images, links, custom_details, details)
                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            &[&item.api_key as &dyn ToSql, &item.event_type, &item.incident_key,
+            &[&item.api_key as &dyn ToSql, &item.event_type, &item.alert_key,
                 &item.summary, created_at, &item_id,
                 &item.priority, &item.images, &item.links, &item.custom_details, &item.details],
         );
