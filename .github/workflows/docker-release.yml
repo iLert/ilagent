@@ -10,7 +10,7 @@ jobs:
     if: "!github.event.release.prerelease"
     name: Build and publish to docker hub
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     env:
       SERVICE_NAME: ilagent
