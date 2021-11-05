@@ -25,9 +25,9 @@ fn main() -> () {
 
     let matches = App::new("iLert Agent")
 
-        .version("0.3.0")
+        .version("0.3.5")
         .author("iLert GmbH. <support@ilert.com>")
-        .about("The iLert Agent 🦀 📦 is a program that lets you easily integrate your monitoring system with iLert.")
+        .about("The iLert Agent 🦀 📦 lets you easily integrate your on premise system with iLert.")
 
         .arg(Arg::with_name("COMMAND")
             .help("The actual command that should be executed.")
@@ -147,6 +147,20 @@ fn main() -> () {
             .long("mqtt_name")
             .value_name("MQTT_NAME")
             .help("If provided under daemon command, sets mqtt client name (default: 'ilagent')")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_username")
+            .long("mqtt_username")
+            .value_name("MQTT_USERNAME")
+            .help("If provided under daemon command, sets mqtt client credential username (expects mqtt_password to be set as well)")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("mqtt_password")
+            .long("mqtt_password")
+            .value_name("MQTT_PASSWORD")
+            .help("If provided under daemon command, sets mqtt client credential password (only works with mqtt_username set)")
             .takes_value(true)
         )
 
@@ -283,6 +297,15 @@ fn main() -> () {
         config.mqtt_name = Some(mqtt_name.to_string());
         config.mqtt_event_topic = Some(mqtt_event_topic.to_string());
         config.mqtt_heartbeat_topic = Some(mqtt_heartbeat_topic.to_string());
+
+        if matches.is_present("mqtt_username") {
+            config.mqtt_username = Some(matches.value_of("mqtt_username").expect("failed to parse mqtt_username").to_string());
+
+            if matches.is_present("mqtt_password") {
+                config.mqtt_password = Some(matches.value_of("mqtt_password").expect("failed to parse mqtt_password").to_string());
+                info!("mqtt credentials set");
+            }
+        }
 
         if matches.is_present("mqtt_filter_key") {
             config.mqtt_filter_key = Some(matches.value_of("mqtt_filter_key").expect("failed to parse mqtt mapping key: mqtt_filter_key").to_string());

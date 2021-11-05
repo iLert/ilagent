@@ -6,9 +6,13 @@ pub struct ILConfig {
     pub http_worker_count: i8,
     pub db_file: String,
     pub heartbeat_key: Option<String>,
+
     pub mqtt_host: Option<String>,
     pub mqtt_port: Option<u16>,
     pub mqtt_name: Option<String>,
+    pub mqtt_username: Option<String>,
+    pub mqtt_password: Option<String>,
+
     pub mqtt_event_topic: Option<String>,
     pub mqtt_heartbeat_topic: Option<String>,
 
@@ -38,6 +42,8 @@ impl ILConfig {
             mqtt_host: None,
             mqtt_port: None,
             mqtt_name: None,
+            mqtt_username: None,
+            mqtt_password: None,
             mqtt_event_topic: None,
             mqtt_heartbeat_topic: None,
             mqtt_event_key: None,

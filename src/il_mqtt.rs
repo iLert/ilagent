@@ -46,6 +46,12 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
             .set_throttle(Duration::from_secs(1))
             .set_clean_session(false);
 
+        if let Some(mqtt_username) = config.mqtt_username.clone() {
+            mqtt_options.set_credentials(mqtt_username.as_str(),
+                             config.mqtt_password.clone()
+                                 .expect("mqtt_username is set, expecting mqtt_password to be set as well").as_str());
+        }
+
         let (mut client, mut connection) = Client::new(mqtt_options, 10);
 
         let event_topic = config.mqtt_event_topic.clone().expect("Missing mqtt event topic");

@@ -35,11 +35,15 @@ docker run ilert/ilagent
 
 For MacOS and Linux we also provide this one-liner to automatically install the agent:
 
+> Note: default prebuild support stopped at version 0.3.0 if you cannot use the docker image or compile yourself and need new builds please open an issue
+
 ```shell script
 curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | bash -
 ```
 
 ### Pre-build releases
+
+> Note: default prebuild support stopped at version 0.3.0 if you cannot use the docker image or compile yourself and need new builds please open an issue
 
 We provide pre compiled binaries for every major OS on the [release page of this repository](https://github.com/iLert/ilagent/releases).
 
@@ -56,7 +60,7 @@ Grab your version
 Of course you can also grab the source code and compile it yourself.
 Requires cross (`cargo install cross`) to be installed.
 
-- Mac (Host): `cargo build --release`
+- Mac (or your host): `cargo build --release`
 - Linux: `cross build --release --target x86_64-unknown-linux-gnu`
 - Windows: `cross build --release --target x86_64-pc-windows-gnu`
 - ARM: `cross build --release --target arm-unknown-linux-gnueabihf`
@@ -84,6 +88,11 @@ You can always run `ilagent --help` or take a look at our [documentation](https:
 
 After connecting to your MQTT broker or proxy using `-m 127.0.0.1 -q 1883 -n ilagent`
 you may specify the MQTT topic that should be listen to for events with `-e 'ilert/events'`.
+
+#### Providing credentials
+
+In case you need to provide credentials to your MQTT broker you can do so by passing the two arguments `--mqtt_username 'my-user'`
+and `--mqtt_password 'my-pass'`, there is no default provided otherwise.
 
 ### Subscribing to wildcards and filtering events
 
@@ -121,6 +130,7 @@ In case the property values of your eventType field do not match to iLert's API 
 ```sh
 ilagent daemon -v -v \
     -m 127.0.0.1 -q 1883 -n ilagent -e '#' \
+    --mqtt_username 'my-user' --mqtt_password 'my-pass' \
     --mqtt_event_key 'il1api112115xxx' \
     --mqtt_map_key_alert_key 'mCode' \
     --mqtt_map_key_summary 'comment' \
