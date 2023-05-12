@@ -4,8 +4,6 @@
 ![Docker Image Version (latest by date)](https://img.shields.io/docker/v/ilert/ilagent?sort=date)
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/iLert/ilagent/docker-release.yml?branch=master)
 
-ilert
-
 The ilert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with ilert.
 
 <sup>Super small footprint (20MB container, that consumes about 5MB! of RAM)</sup>
