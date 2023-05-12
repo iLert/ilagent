@@ -4,7 +4,7 @@
 ![Docker Image Version (latest by date)](https://img.shields.io/docker/v/ilert/ilagent?sort=date)
 ![GitHub Workflow Status](https://img.shields.io/github/workflow/status/iLert/ilagent/docker-release)
 
-The iLert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with iLert.
+The ilert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with ilert.
 
 <sup>Super small footprint (20MB container, that consumes about 5MB! of RAM)</sup>
 
@@ -18,6 +18,7 @@ The iLert agent comes in a single binary and helps you to
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
 * Map and filter your MQTT events to alerts [see](#mapping-mqtt-events)
+* Clean-up your open alerts (mass resolve) `ilagent cleanup -k your-api-key --resource alerts`
 
 <p align="center"><img src="/demo.gif?raw=true"/></p>
 
@@ -103,7 +104,7 @@ The above example will listen for every message on every topic with a payload th
 ### Setting a fixed API key
 
 Most likely when mapping custom events from MQTT topics, you will not be able to 1:1 map an apiKey field.
-This is why the `--mqtt_event_key 'il1api112115xxx'` option allows you to set a fixed iLert alert source API key
+This is why the `--mqtt_event_key 'il1api112115xxx'` option allows you to set a fixed ilert alert source API key
 that is automatically used for every mapped MQTT event.
 
 ### Mapping required event fields
@@ -117,7 +118,7 @@ that is automatically used for every mapped MQTT event.
 
 ### Mapping values of the eventType field
 
-In case the property values of your eventType field do not match to iLert's API fields `ALERT, ACCEPT and RESOLVE` you may map these values as well.
+In case the property values of your eventType field do not match to ilert's API fields `ALERT, ACCEPT and RESOLVE` you may map these values as well.
 
 - map `ALERT` value with `--mqtt_map_val_etype_alert 'SET'` e.g. SET -> ALERT
 - map `ACCEPT` value with `--mqtt_map_val_etype_accept 'ACK'` e.g. ACK -> ACCEPT

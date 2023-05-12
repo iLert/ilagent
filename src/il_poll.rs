@@ -97,7 +97,7 @@ pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> boo
     };
 
     let post_result = ilert_client
-        .post()
+        .create()
         .event_with_details(
             event.api_key.as_str(),
             event_type,

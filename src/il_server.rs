@@ -1,4 +1,4 @@
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use log::{info, error};
 use std::sync::Mutex;
 use std::convert::TryInto;
@@ -156,13 +156,13 @@ struct WebContextContainer {
     db: ILDatabase,
 }
 
-fn get_index(_req: HttpRequest) -> HttpResponse {
+async fn get_index(_req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.3.5")
+        .body("ilagent/0.4.0")
 }
 
-fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> HttpResponse {
+async fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> impl Responder {
 
     let api_key = &path.0;
 
@@ -184,7 +184,7 @@ fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRe
 /**
     This endpoint tries to mimic https://api.ilert.com/api-docs/#tag/Events/paths/~1events/post
 */
-fn post_event(container: web::Data<Mutex<WebContextContainer>>, event: web::Json<EventQueueItemJson>) -> HttpResponse {
+async fn post_event(_req: HttpRequest, container: web::Data<Mutex<WebContextContainer>>, event: web::Json<EventQueueItemJson>) -> impl Responder {
 
     let container = container.lock();
     if container.is_err() {
@@ -240,16 +240,16 @@ fn config_app(cfg: &mut web::ServiceConfig) {
     );
 }
 
-pub fn run_server(config: &ILConfig, db: ILDatabase) -> std::io::Result<()> {
+pub fn run_server(config: &ILConfig, db: ILDatabase) -> () {
     let addr= config.get_http_bind_str().clone();
     let container = web::Data::new(Mutex::new(WebContextContainer{ db }));
-    HttpServer::new(move|| App::new()
-        .register_data(container.clone())
+    let server = HttpServer::new(move|| App::new()
+        .app_data(container.clone())
         .wrap(middleware::Logger::default())
-        .data(web::JsonConfig::default().limit(16000))
+        .app_data(web::JsonConfig::default().limit(16000))
         .configure(config_app))
-        .workers(config.http_worker_count.try_into().unwrap())
+        .workers(config.http_worker_count.try_into().expect("Failed to get http worker count"))
         .bind(addr.as_str())
-        .unwrap()
-        .run()
+        .expect("Failed to bind to http port");
+    let _ = server.run();
 }

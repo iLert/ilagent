@@ -1,0 +1,4 @@
+#!/bin/bash
+cargo run -- cleanup -v -v \
+  -k 'eyJhbGciOiJIUzIjx' \
+  --resource alerts

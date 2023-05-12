@@ -5,7 +5,7 @@ use std::time::{Duration};
 use std::sync::atomic::{AtomicBool, Ordering};
 use serde_derive::{Deserialize, Serialize};
 use std::sync::Arc;
-use rumqttc::{MqttOptions, Client, QoS, Incoming};
+use rumqttc::{MqttOptions, Client, QoS, Incoming, Event};
 use std::str;
 
 use ilert::ilert::ILert;
@@ -42,8 +42,8 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
         );
 
         mqtt_options
-            .set_keep_alive(5)
-            .set_throttle(Duration::from_secs(1))
+            .set_keep_alive(Duration::from_secs(5))
+            .set_pending_throttle(Duration::from_secs(1))
             .set_clean_session(false);
 
         if let Some(mqtt_username) = config.mqtt_username.clone() {
@@ -91,13 +91,9 @@ pub fn run_mqtt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> Join
                     info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
                 }
 
-                let (inc, _out) = invoke.unwrap();
-                if inc.is_none() {
-                    continue;
-                }
-
-                match inc.unwrap() {
-                    Incoming::Publish(message) => {
+                let event: Event = invoke.unwrap();
+                match event {
+                    Event::Incoming(Incoming::Publish(message)) => {
 
                         let payload = str::from_utf8(&message.payload);
                         if payload.is_err() {

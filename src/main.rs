@@ -20,19 +20,20 @@ mod il_hbt;
 mod il_mqtt;
 mod il_poll;
 mod il_server;
+mod il_cleanup;
 
 fn main() -> () {
 
-    let matches = App::new("iLert Agent")
+    let matches = App::new("ilert Agent")
 
-        .version("0.3.5")
+        .version("0.4.0")
         .author("iLert GmbH. <support@ilert.com>")
-        .about("The iLert Agent 🦀 📦 lets you easily integrate your on premise system with iLert.")
+        .about("The ilert Agent 🦀 📦 lets you easily integrate your on premise system with ilert.")
 
         .arg(Arg::with_name("COMMAND")
             .help("The actual command that should be executed.")
             .max_values(1)
-            .possible_values(&["daemon", "event", "heartbeat"])
+            .possible_values(&["daemon", "event", "heartbeat", "cleanup"])
             .required(true)
             .index(1))
 
@@ -125,6 +126,15 @@ fn main() -> () {
             .help("Sets the event alert key for the 'event' command")
             .takes_value(true)
         )
+
+        .arg(Arg::with_name("resource")
+            .long("resource")
+            .value_name("RESOURCE")
+            .help("Sets a resource target for the command, not specifically bound to a single command")
+            .takes_value(true)
+        )
+
+        /* ### mqtt ### */
 
         .arg(Arg::with_name("mqtt_host")
             .short("m")
@@ -275,7 +285,7 @@ fn main() -> () {
         }
     };
 
-    env_logger::from_env(Env::default()
+    env_logger::Builder::from_env(Env::default()
         .default_filter_or(log_level))
         .init();
 
@@ -364,6 +374,7 @@ fn main() -> () {
         "daemon" => run_daemon(&config),
         "event" => run_event(&matches),
         "heartbeat" => run_heartbeat(&matches),
+        "cleanup" => run_cleanup(&matches),
         _ => panic!("Unsupported command provided.") // unreachable
     }
 }
@@ -425,8 +436,7 @@ fn run_daemon(config: &ILConfig) -> () {
 
     if config.start_http {
         info!("Starting server..");
-        il_server::run_server(&config, db_web_instance.expect("db instance is needed for http server"))
-            .expect("Failed to start http server");
+        il_server::run_server(&config, db_web_instance.expect("db instance is needed for http server"));
         // blocking..
     }
 
@@ -541,5 +551,29 @@ fn run_heartbeat(matches: &ArgMatches) -> () {
 
     if il_hbt::ping_heartbeat(&ilert_client, api_key) {
         info!("Heartbeat ping successful");
+    }
+}
+
+/**
+    Attempts to cleanup resources
+*/
+fn run_cleanup(matches: &ArgMatches) -> () {
+
+    if !matches.is_present("api_key") {
+        return error!("Missing api_key arg (-k, --api_key)");
+    }
+
+    if !matches.is_present("resource") {
+        return error!("Missing resource arg (--resource)");
+    }
+
+    let api_key = matches.value_of("api_key").unwrap();
+    let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+    ilert_client.auth_via_token(api_key).expect("Failed to set api key");
+
+    let resource = matches.value_of("resource").unwrap();
+    match resource {
+        "alerts" => il_cleanup::cleanup_alerts(&ilert_client),
+        _ => panic!("Unsupported 'resource' provided.")
     }
 }

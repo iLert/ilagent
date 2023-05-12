@@ -1,5 +1,12 @@
 # ilagent CHANGELOG
 
+## 2023-05-13, Version 0.4.0
+
+* upgraded dependencies
+* bumped SQLite from 3.36.0 to 3.41.2
+* added new `cleanup` command
+* added cleanup command resource `alerts`
+
 ## 2021-11-02, Version 0.3.0
 
 * **BREAKING** --incident_key is now --alert_key (-i is still available)
