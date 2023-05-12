@@ -1,4 +1,4 @@
-FROM ekidd/rust-musl-builder:1.69.0 AS builder
+FROM ekidd/rust-musl-builder:1.57.0 AS builder
 ADD . ./
 RUN sudo chown -R rust:rust /home/rust/src
 RUN cargo build --release
