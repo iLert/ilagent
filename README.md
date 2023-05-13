@@ -2,7 +2,7 @@
 
 ![Docker Image Size (latest by date)](https://img.shields.io/docker/image-size/ilert/ilagent?sort=date)
 ![Docker Image Version (latest by date)](https://img.shields.io/docker/v/ilert/ilagent?sort=date)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/iLert/ilagent/docker-release.yml?branch=master)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/iLert/ilagent/docker-release.yml)
 
 The ilert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with ilert.
 
