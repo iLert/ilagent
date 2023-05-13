@@ -6,9 +6,9 @@
 
 The ilert Agent 🦀 📦 is a program that lets you easily integrate your on premise system with ilert.
 
-## iLert agent
+## ilert agent
 
-The iLert agent comes in a single binary with a tiny footprint and helps you to
+The ilert agent comes in a single binary with a tiny footprint and helps you to
 
 * Send events from the command line `ilagent event -k il1insada3872867c63 -t ALERT -s 'a summary from the shell'`
 * Send heartbeat pings from the command line `ilagent heartbeat -k il1insada3872867c63`
