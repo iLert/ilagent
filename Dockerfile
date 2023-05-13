@@ -1,11 +1,9 @@
-FROM ekidd/rust-musl-builder:1.57.0 AS builder
-ADD . ./
-RUN sudo chown -R rust:rust /home/rust/src
-RUN cargo build --release
-RUN strip /home/rust/src/target/x86_64-unknown-linux-musl/release/ilagent
+FROM rust:1.69-bullseye as builder
+WORKDIR /usr/src/ilagent
+COPY . .
+RUN cargo install --path .
 
-FROM alpine:3.13.6 AS runner
-COPY --from=builder /home/rust/src/target/x86_64-unknown-linux-musl/release/ilagent \
-  /ilagent
-
-ENTRYPOINT ["./ilagent"]
+FROM debian:bullseye-slim
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/cargo/bin/ilagent /usr/local/bin/ilagent
+ENTRYPOINT ["ilagent"]
