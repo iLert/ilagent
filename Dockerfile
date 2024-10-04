@@ -1,4 +1,5 @@
 FROM rust:1.81-bookworm as builder
+RUN apt-get update && apt-get install -y cmake
 WORKDIR /usr/src/ilagent
 COPY . .
 RUN cargo install --path .
