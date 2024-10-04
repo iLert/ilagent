@@ -1,3 +1,0 @@
-#!/bin/bash
-cargo run -- daemon -p 8977 -v -v --heartbeat aksdkjasdkasjdlasjjasdlsajkl \
-    -m 192.168.1.14 -q 1883 -n ilbro -e 'ilert/e' -r 'ilert/h'

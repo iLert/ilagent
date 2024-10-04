@@ -13,20 +13,23 @@ pub struct ILConfig {
     pub mqtt_username: Option<String>,
     pub mqtt_password: Option<String>,
 
-    pub mqtt_event_topic: Option<String>,
-    pub mqtt_heartbeat_topic: Option<String>,
+    pub kafka_brokers: Option<String>,
+    pub kafka_group_id: Option<String>,
 
-    pub mqtt_event_key: Option<String>,
-    pub mqtt_map_key_etype: Option<String>,
-    pub mqtt_map_key_alert_key: Option<String>,
-    pub mqtt_map_key_summary: Option<String>,
+    pub event_topic: Option<String>,
+    pub heartbeat_topic: Option<String>,
 
-    pub mqtt_map_val_etype_alert: Option<String>,
-    pub mqtt_map_val_etype_accept: Option<String>,
-    pub mqtt_map_val_etype_resolve: Option<String>,
+    pub event_key: Option<String>,
+    pub map_key_etype: Option<String>,
+    pub map_key_alert_key: Option<String>,
+    pub map_key_summary: Option<String>,
 
-    pub mqtt_filter_key: Option<String>,
-    pub mqtt_filter_val: Option<String>
+    pub map_val_etype_alert: Option<String>,
+    pub map_val_etype_accept: Option<String>,
+    pub map_val_etype_resolve: Option<String>,
+
+    pub filter_key: Option<String>,
+    pub filter_val: Option<String>
 }
 
 impl ILConfig {
@@ -44,17 +47,19 @@ impl ILConfig {
             mqtt_name: None,
             mqtt_username: None,
             mqtt_password: None,
-            mqtt_event_topic: None,
-            mqtt_heartbeat_topic: None,
-            mqtt_event_key: None,
-            mqtt_map_key_etype: None,
-            mqtt_map_key_alert_key: None,
-            mqtt_map_key_summary: None,
-            mqtt_map_val_etype_alert: None,
-            mqtt_map_val_etype_accept: None,
-            mqtt_map_val_etype_resolve: None,
-            mqtt_filter_key: None,
-            mqtt_filter_val: None
+            kafka_brokers: None,
+            kafka_group_id: None,
+            event_topic: None,
+            heartbeat_topic: None,
+            event_key: None,
+            map_key_etype: None,
+            map_key_alert_key: None,
+            map_key_summary: None,
+            map_val_etype_alert: None,
+            map_val_etype_accept: None,
+            map_val_etype_resolve: None,
+            filter_key: None,
+            filter_val: None
         }
     }
 

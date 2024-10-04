@@ -1,0 +1,2 @@
+#!/bin/bash
+cargo run -- daemon -v -v --kafka_brokers localhost:9092 --kafka_group_id ilagent -e 'test-topic'

@@ -1,63 +1,45 @@
-use std::thread;
-use std::thread::JoinHandle;
+use std::sync::Arc;
 use log::{info, warn, error};
 use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventApiResource, ILertEventType, ILertPriority};
+use crate::DaemonContext;
+use crate::models::event::EventQueueItemJson;
+use crate::models::event_db::EventQueueItem;
 
-use crate::il_server::EventQueueItemJson;
+pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
-use crate::il_db::{ILDatabase, EventQueueItem};
-use crate::il_config::ILConfig;
+    let mut last_run = Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(250)).await;
 
-pub fn run_poll_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinHandle<()> {
-
-    let config = config.clone();
-    let are_we_running = are_we_running.clone();
-    let poll_thread = thread::spawn(move || {
-
-        let ilert_client = ILert::new().expect("Failed to create iLert client");
-        let mut last_run = Instant::now();
-        // thread gets its own db instance, no migrations required
-        let db = ILDatabase::new(config.db_file.as_str());
-        loop {
-            thread::sleep(Duration::from_millis(250));
-            if !are_we_running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            if last_run.elapsed().as_millis() < 5000 {
-                continue;
-            } else {
-                last_run = Instant::now();
-            }
-
-            let items_result = db.get_il_events(20);
-            match items_result {
-                Ok(items) => {
-                    if !items.is_empty() {
-                        info!("Found {} queued events.", items.len());
-                        process_queued_events(&ilert_client, &db, items);
-                    }
-                },
-                Err(e) => error!("Failed to fetch queued events {}", e)
-            };
+        if last_run.elapsed().as_millis() < 5000 {
+            continue;
+        } else {
+            last_run = Instant::now();
         }
-    });
 
-    poll_thread
+        let items_result = daemon_ctx.db.lock().await.get_il_events(20);
+        match items_result {
+            Ok(items) => {
+                if !items.is_empty() {
+                    info!("Found {} queued events.", items.len());
+                    process_queued_events(daemon_ctx.clone(), items).await;
+                }
+            },
+            Err(e) => error!("Failed to fetch queued events {}", e)
+        };
+    }
 }
 
-fn process_queued_events(ilert_client: &ILert, db: &ILDatabase, events: Vec<EventQueueItem>) -> () {
+async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<EventQueueItem>) -> () {
 
     for event in events.iter() {
-        let should_retry = process_queued_event(ilert_client, event);
+        let should_retry = process_queued_event(&daemon_ctx.ilert_client, event).await;
         let event_id = event.id.clone().unwrap_or("".to_string());
         if !should_retry {
-            let del_result = db.delete_il_event(event_id.as_str());
+            let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
             match del_result {
                 Ok(_) => info!("Removed event {} from queue", event_id),
                 _ => warn!("Failed to remove event {} from queue",event_id)
@@ -68,7 +50,7 @@ fn process_queued_events(ilert_client: &ILert, db: &ILDatabase, events: Vec<Even
     }
 }
 
-pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
+pub async fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
 
     let parsed_event = EventQueueItemJson::from_db(event.clone());
 
@@ -110,7 +92,8 @@ pub fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> boo
             parsed_event.customDetails,
             None
             )
-        .execute();
+        .execute()
+        .await;
 
     let response = match post_result {
         Ok(res) => res,

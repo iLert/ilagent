@@ -1,178 +1,35 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use log::{info, error};
-use std::sync::Mutex;
+use std::sync::{Arc};
+use tokio::sync::Mutex;
 use std::convert::TryInto;
-use serde_derive::{Deserialize, Serialize};
 use serde_json::json;
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventImage, EventLink, ILertEventType, ILertPriority};
+use ilert::ilert_builders::{ILertEventType, ILertPriority};
 
-use crate::il_db::{ILDatabase, EventQueueItem};
-use crate::il_config::ILConfig;
-use crate::il_hbt;
-
-#[allow(non_snake_case)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventQueueItemJson {
-    pub apiKey: String,
-    pub eventType: String,
-    pub summary: String,
-    pub details: Option<String>,
-    pub alertKey: Option<String>,
-    pub priority: Option<String>,
-    pub images: Option<Vec<EventImage>>,
-    pub links: Option<Vec<EventLink>>,
-    pub customDetails: Option<serde_json::Value>
-}
-
-/**
-    helper to apply additional mqtt mappings easier
-*/
-#[allow(non_snake_case)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct EventQueueTransitionItemJson {
-    pub apiKey: Option<String>,
-    pub eventType: Option<String>,
-    pub summary: Option<String>,
-    pub details: Option<String>,
-    pub alertKey: Option<String>,
-    pub priority: Option<String>,
-    pub images: Option<Vec<EventImage>>,
-    pub links: Option<Vec<EventLink>>,
-    pub customDetails: Option<serde_json::Value>
-}
-
-impl EventQueueItemJson {
-
-    pub fn from_transition(trans: EventQueueTransitionItemJson) -> EventQueueItemJson {
-        EventQueueItemJson {
-            apiKey: trans.apiKey.expect("failed to map required event queue item key: apiKey"),
-            eventType: trans.eventType.expect("failed to map required event queue item key: eventType"),
-            summary: trans.summary.unwrap_or("".to_string()), // field is optional for some event types
-            details: trans.details,
-            alertKey: trans.alertKey,
-            priority: trans.priority,
-            images: trans.images,
-            links: trans.links,
-            customDetails: trans.customDetails
-        }
-    }
-
-    pub fn to_db(item: EventQueueItemJson) -> EventQueueItem {
-
-        let images = match item.images {
-            Some(v) => {
-                let serialised = serde_json::to_string(&v);
-                match serialised {
-                    Ok(str) => Some(str),
-                    _ => None
-                }
-            },
-            None => None
-        };
-
-        let links = match item.links {
-            Some(v) => {
-                let serialised = serde_json::to_string(&v);
-                match serialised {
-                    Ok(str) => Some(str),
-                    _ => None
-                }
-            },
-            None => None
-        };
-
-        let custom_details = match item.customDetails {
-            Some(val) => Some(val.to_string()),
-            None => None
-        };
-
-        EventQueueItem {
-            id: None,
-            api_key: item.apiKey,
-            event_type: item.eventType,
-            alert_key: item.alertKey,
-            summary: item.summary,
-            details: item.details,
-            created_at: None,
-            priority: item.priority,
-            images,
-            links,
-            custom_details
-        }
-    }
-
-    pub fn from_db(item: EventQueueItem) -> EventQueueItemJson {
-
-        let images : Option<Vec<EventImage>> = match item.images {
-            Some(str) => {
-                let parsed = serde_json::from_str(str.as_str());
-                match parsed {
-                    Ok(v) => Some(v),
-                    _ => None
-                }
-            },
-            None => None
-        };
-
-        let links : Option<Vec<EventLink>> = match item.links {
-            Some(str) => {
-                let parsed = serde_json::from_str(str.as_str());
-                match parsed {
-                    Ok(v) => Some(v),
-                    _ => None
-                }
-            },
-            None => None
-        };
-
-        let custom_details : Option<serde_json::Value> = match item.custom_details {
-            Some(str) => {
-                let parsed = serde_json::from_str(str.as_str());
-                match parsed {
-                    Ok(v) => Some(v),
-                    _ => None
-                }
-            },
-            None => None
-        };
-
-        EventQueueItemJson {
-             apiKey: item.api_key,
-             eventType: item.event_type,
-             summary: item.summary,
-             details: item.details,
-             alertKey: item.alert_key,
-             priority: item.priority,
-             images,
-             links,
-             customDetails: custom_details
-        }
-    }
-}
+use crate::il_db::{ILDatabase};
+use crate::{il_hbt, DaemonContext};
+use crate::models::event::EventQueueItemJson;
 
 struct WebContextContainer {
     db: ILDatabase,
+    ilert_client: ILert
 }
 
 async fn get_index(_req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.4.0")
+        .body("ilagent/0.5.0")
 }
 
-async fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> impl Responder {
+async fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> impl Responder {
+
+    let container = container.lock().await;
 
     let api_key = &path.0;
 
-    let ilert_client = ILert::new();
-    if ilert_client.is_err() {
-        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to create iLert client" }));
-    }
-    let ilert_client = ilert_client.unwrap();
-
-    match il_hbt::ping_heartbeat(&ilert_client, api_key) {
+    match il_hbt::ping_heartbeat(&container.ilert_client, api_key).await {
         true => {
             info!("Proxied heartbeat {}", api_key);
             HttpResponse::Accepted().json(json!({}))
@@ -186,11 +43,7 @@ async fn get_heartbeat(_container: web::Data<Mutex<WebContextContainer>>, _req: 
 */
 async fn post_event(_req: HttpRequest, container: web::Data<Mutex<WebContextContainer>>, event: web::Json<EventQueueItemJson>) -> impl Responder {
 
-    let container = container.lock();
-    if container.is_err() {
-        return HttpResponse::InternalServerError().json(json!({ "error":  "Failed to get mutex container handle" }));
-    }
-    let container = container.unwrap();
+    let container = container.lock().await;
 
     let event = event.into_inner();
     let event = EventQueueItemJson::to_db(event);
@@ -240,15 +93,17 @@ fn config_app(cfg: &mut web::ServiceConfig) {
     );
 }
 
-pub fn run_server(config: &ILConfig, db: ILDatabase) -> () {
-    let addr= config.get_http_bind_str().clone();
-    let container = web::Data::new(Mutex::new(WebContextContainer{ db }));
+pub fn run_server(daemon_context: Arc<DaemonContext>) -> () {
+    let addr = daemon_context.config.get_http_bind_str().clone();
+    let db = ILDatabase::new(daemon_context.config.db_file.as_str());
+    let ilert_client = ILert::new().expect("failed to create ilert client");
+    let container = web::Data::new(Mutex::new(WebContextContainer{ db, ilert_client }));
     let server = HttpServer::new(move|| App::new()
         .app_data(container.clone())
         .wrap(middleware::Logger::default())
         .app_data(web::JsonConfig::default().limit(16000))
         .configure(config_app))
-        .workers(config.http_worker_count.try_into().expect("Failed to get http worker count"))
+        .workers(daemon_context.config.http_worker_count.try_into().expect("Failed to get http worker count"))
         .bind(addr.as_str())
         .expect("Failed to bind to http port");
     let _ = server.run();

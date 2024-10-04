@@ -1,7 +1,7 @@
 .github
 .idea
 target/
-test/
+examples/
 CHANGELOG.md
 demo.gif
 install.sh

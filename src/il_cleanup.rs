@@ -1,9 +1,9 @@
-use std::{thread, time};
+use std::time;
 use log::{debug, info, error};
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{AlertGetApiResource, AlertPutApiResource};
 
-pub fn cleanup_alerts(ilert_client: &ILert) -> () {
+pub async fn cleanup_alerts(ilert_client: &ILert) -> () {
 
     info!("Resolving alerts...");
     let mut index = 0;
@@ -18,6 +18,7 @@ pub fn cleanup_alerts(ilert_client: &ILert) -> () {
             .filter("states", "ACCEPTED")
             .alerts()
             .execute()
+            .await
             .expect("Failed to fetch alerts");
 
         if alerts.status != 200 {
@@ -38,7 +39,7 @@ pub fn cleanup_alerts(ilert_client: &ILert) -> () {
             break;
         }
 
-        thread::sleep(time::Duration::from_secs(1));
+        tokio::time::sleep(time::Duration::from_secs(1)).await;
         for alert in alerts.iter() {
 
             let alert_id = alert
@@ -51,6 +52,7 @@ pub fn cleanup_alerts(ilert_client: &ILert) -> () {
                 .update()
                 .resolve_alert(alert_id)
                 .execute()
+                .await
                 .expect(format!("Failed to resolve alert {}", alert_id).as_str());
 
             if resolve_result.status != 200 {
@@ -61,7 +63,7 @@ pub fn cleanup_alerts(ilert_client: &ILert) -> () {
             }
 
             // dont hit API limits
-            thread::sleep(time::Duration::from_secs(1));
+            tokio::time::sleep(time::Duration::from_secs(1)).await;
         }
 
         index = index + 12;

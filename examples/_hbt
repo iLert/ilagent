@@ -1,0 +1,2 @@
+#!/bin/bash
+cargo run -- heartbeat -v -v -k il1hbt123

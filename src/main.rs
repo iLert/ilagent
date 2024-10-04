@@ -1,6 +1,5 @@
 use log::{debug, info, error};
 use env_logger::Env;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use clap::{Arg, App, ArgMatches};
 use std::panic;
@@ -8,27 +7,35 @@ use std::process;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
+use tokio::sync::{Mutex};
+
+use il_config::ILConfig;
+use il_db::ILDatabase;
+use crate::models::event_db::EventQueueItem;
 
 mod il_config;
-use il_config::ILConfig;
-
 mod il_db;
-use il_db::ILDatabase;
-use crate::il_db::EventQueueItem;
-
+mod models;
 mod il_hbt;
-mod il_mqtt;
+mod consumers;
 mod il_poll;
 mod il_server;
 mod il_cleanup;
 
-fn main() -> () {
+pub struct DaemonContext {
+    pub config: ILConfig,
+    pub db: Mutex<ILDatabase>,
+    pub ilert_client: ILert
+}
+
+#[tokio::main]
+async fn main() -> () {
 
     let matches = App::new("ilert Agent")
 
-        .version("0.4.4")
-        .author("iLert GmbH. <support@ilert.com>")
-        .about("The ilert Agent 🦀 📦 lets you easily integrate your on premise system with ilert.")
+        .version("0.5.0")
+        .author("ilert GmbH. <support@ilert.com>")
+        .about("ilert Agent 🦀 📦 The swiss army knife.")
 
         .arg(Arg::with_name("COMMAND")
             .help("The actual command that should be executed.")
@@ -174,19 +181,101 @@ fn main() -> () {
             .takes_value(true)
         )
 
-        .arg(Arg::with_name("mqtt_event_topic")
+        /* ### kafka ### */
+
+        .arg(
+            Arg::with_name("kafka_brokers")
+                .long("kafka_brokers")
+                .help("Broker list in kafka format")
+                .takes_value(true)
+        )
+
+        .arg(
+            Arg::with_name("kafka_group_id")
+                .long("kafka_group_id")
+                .help("Kafka consumer group id")
+                .takes_value(true)
+                .default_value("ilagent"),
+        )
+
+        /* ### consumer overwrites ### */
+
+        .arg(Arg::with_name("event_topic")
             .short("e")
-            .long("mqtt_event_topic")
-            .value_name("MQTT_EVENT_TOPIC")
-            .help("MQTT topic to listen to (default: 'ilert/events')")
+            .long("event_topic")
+            .value_name("EVENT_TOPIC")
+            .help("Consumer topic to listen to (default: 'ilert/events')")
             .takes_value(true)
         )
 
-        .arg(Arg::with_name("mqtt_heartbeat_topic")
+        .arg(Arg::with_name("heartbeat_topic")
             .short("r")
-            .long("mqtt_heartbeat_topic")
-            .value_name("MQTT_HEARTBEAT_TOPIC")
-            .help("MQTT topic to listen to (default: 'ilert/heartbeats')")
+            .long("heartbeat_topic")
+            .value_name("HEARTBEAT_TOPIC")
+            .help("Consumer topic to listen to (default: 'ilert/heartbeats')")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("event_key")
+            .long("event_key")
+            .value_name("event_key")
+            .help("If provided under daemon command, overwrites all events with apiKey")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_key_etype")
+            .long("map_key_etype")
+            .value_name("map_key_etype")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'eventType'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_key_alert_key")
+            .long("map_key_alert_key")
+            .value_name("MAP_KEY_ALERT_KEY")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'alertKey'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_key_summary")
+            .long("map_key_summary")
+            .value_name("map_key_summary")
+            .help("If provided under daemon command, overwrites JSON payload key. Default is 'summary'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_val_etype_alert")
+            .long("map_val_etype_alert")
+            .value_name("map_val_etype_alert")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ALERT'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_val_etype_accept")
+            .long("map_val_etype_accept")
+            .value_name("map_val_etype_accept")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ACCEPT'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("map_val_etype_resolve")
+            .long("map_val_etype_resolve")
+            .value_name("map_val_etype_resolve")
+            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'RESOLVE'")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("filter_key")
+            .long("filter_key")
+            .value_name("filter_key")
+            .help("If provided under daemon command, requires given key in JSON payload")
+            .takes_value(true)
+        )
+
+        .arg(Arg::with_name("filter_val")
+            .long("filter_val")
+            .value_name("filter_val")
+            .help("If provided under daemon command, along with 'filter_key' requires certain value of JSON payload property")
             .takes_value(true)
         )
 
@@ -195,71 +284,6 @@ fn main() -> () {
             .long("verbose")
             .multiple(true)
             .help("Sets the level of verbosity")
-            )
-
-        /* ### mqtt overwrites ### */
-
-        .arg(Arg::with_name("mqtt_event_key")
-            .long("mqtt_event_key")
-            .value_name("MQTT_EVENT_KEY")
-            .help("If provided under daemon command, overwrites all events with apiKey")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_key_etype")
-            .long("mqtt_map_key_etype")
-            .value_name("MQTT_MAP_KEY_ETYPE")
-            .help("If provided under daemon command, overwrites JSON payload key. Default is 'eventType'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_key_alert_key")
-            .long("mqtt_map_key_alert_key")
-            .value_name("MQTT_MAP_KEY_ALERT_KEY")
-            .help("If provided under daemon command, overwrites JSON payload key. Default is 'alertKey'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_key_summary")
-            .long("mqtt_map_key_summary")
-            .value_name("MQTT_MAP_KEY_SUMMARY")
-            .help("If provided under daemon command, overwrites JSON payload key. Default is 'summary'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_val_etype_alert")
-            .long("mqtt_map_val_etype_alert")
-            .value_name("MQTT_MAP_VAL_ETYPE_ALERT")
-            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ALERT'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_val_etype_accept")
-            .long("mqtt_map_val_etype_accept")
-            .value_name("MQTT_MAP_VAL_ETYPE_ACCEPT")
-            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'ACCEPT'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_map_val_etype_resolve")
-            .long("mqtt_map_val_etype_resolve")
-            .value_name("MQTT_MAP_VAL_ETYPE_RESOLVE")
-            .help("If provided under daemon command, overwrites JSON payload value, of key 'eventType' with origin value 'RESOLVE'")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_filter_key")
-            .long("mqtt_filter_key")
-            .value_name("MQTT_FILTER_KEY")
-            .help("If provided under daemon command, requires given key in JSON payload")
-            .takes_value(true)
-        )
-
-        .arg(Arg::with_name("mqtt_filter_val")
-            .long("mqtt_filter_val")
-            .value_name("MQTT_FILTER_VAL")
-            .help("If provided under daemon command, along with 'mqtt_filter_key' requires certain value of JSON payload property")
-            .takes_value(true)
         )
 
         .get_matches();
@@ -299,69 +323,36 @@ fn main() -> () {
         let mqtt_host = matches.value_of("mqtt_host").unwrap_or("127.0.0.1");
         let mqtt_port_str = matches.value_of("mqtt_port").unwrap_or("1883");
         let mqtt_name = matches.value_of("mqtt_name").unwrap_or("ilagent");
-        let mqtt_event_topic = matches.value_of("mqtt_event_topic").unwrap_or("ilert/events");
-        let mqtt_heartbeat_topic = matches.value_of("mqtt_heartbeat_topic").unwrap_or("ilert/heartbeats");
 
         config.mqtt_host = Some(mqtt_host.to_string());
         config.set_mqtt_port_from_str(mqtt_port_str);
         config.mqtt_name = Some(mqtt_name.to_string());
-        config.mqtt_event_topic = Some(mqtt_event_topic.to_string());
-        config.mqtt_heartbeat_topic = Some(mqtt_heartbeat_topic.to_string());
 
-        if matches.is_present("mqtt_username") {
-            config.mqtt_username = Some(matches.value_of("mqtt_username").expect("failed to parse mqtt_username").to_string());
+        let event_topic = matches.value_of("event_topic").unwrap_or("ilert/events");
+        let heartbeat_topic = matches.value_of("heartbeat_topic").unwrap_or("ilert/heartbeats");
+        config.event_topic = Some(event_topic.to_string());
+        config.heartbeat_topic = Some(heartbeat_topic.to_string());
 
-            if matches.is_present("mqtt_password") {
-                config.mqtt_password = Some(matches.value_of("mqtt_password").expect("failed to parse mqtt_password").to_string());
-                info!("mqtt credentials set");
-            }
+        config = parse_consumer_arguments(&matches, config);
+    }
+
+    if matches.is_present("kafka_brokers") {
+
+        let kafka_brokers = matches.value_of("kafka_brokers").unwrap_or("localhost:9092");
+        let kafka_group_id = matches.value_of("kafka_group_id").unwrap_or("ilagent");
+
+        config.kafka_brokers = Some(kafka_brokers.to_string());
+        config.kafka_group_id = Some(kafka_group_id.to_string());
+
+        if let Some(topic) = matches.value_of("event_topic") {
+            config.event_topic = Some(topic.to_string());
         }
 
-        if matches.is_present("mqtt_filter_key") {
-            config.mqtt_filter_key = Some(matches.value_of("mqtt_filter_key").expect("failed to parse mqtt mapping key: mqtt_filter_key").to_string());
-            info!("Filter key is present: {:?} will be required in event payloads", config.mqtt_filter_key);
+        if let Some(topic) = matches.value_of("heartbeat_topic") {
+            config.heartbeat_topic = Some(topic.to_string());
         }
 
-        if matches.is_present("mqtt_filter_val") {
-            config.mqtt_filter_val = Some(matches.value_of("mqtt_filter_val").expect("failed to parse mqtt mapping key: mqtt_filter_val").to_string());
-            info!("Filter key value is present, will be required in event payloads");
-        }
-
-        // mappings
-        if matches.is_present("mqtt_event_key") {
-            config.mqtt_event_key = Some(matches.value_of("mqtt_event_key").expect("failed to parse mqtt mapping key: mqtt_event_key").to_string());
-            info!("eventKey has been configured, overwriting events with static key");
-        }
-
-        if matches.is_present("mqtt_map_key_etype") {
-            config.mqtt_map_key_etype = Some(matches.value_of("mqtt_map_key_etype").expect("failed to parse mqtt mapping key: mqtt_map_key_etype").to_string());
-            info!("Overwrite for payload key 'eventType' has been configured: '{:?}'", config.mqtt_map_key_etype);
-        }
-
-        if matches.is_present("mqtt_map_key_alert_key") {
-            config.mqtt_map_key_alert_key = Some(matches.value_of("mqtt_map_key_alert_key").expect("failed to parse mqtt mapping key: mqtt_map_key_alert_key").to_string());
-            info!("Overwrite for payload key 'alertKey' has been configured: '{:?}'", config.mqtt_map_key_alert_key);
-        }
-
-        if matches.is_present("mqtt_map_key_summary") {
-            config.mqtt_map_key_summary = Some(matches.value_of("mqtt_map_key_summary").expect("failed to parse mqtt mapping key: mqtt_map_key_summary").to_string());
-            info!("Overwrite for payload key 'summary' has been configured: '{:?}'", config.mqtt_map_key_summary);
-        }
-
-        if matches.is_present("mqtt_map_val_etype_alert") {
-            config.mqtt_map_val_etype_alert = Some(matches.value_of("mqtt_map_val_etype_alert").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_alert").to_string());
-            info!("Overwrite for payload val of key 'eventType' and default: 'ALERT' has been configured: '{:?}'", config.mqtt_map_val_etype_alert);
-        }
-
-        if matches.is_present("mqtt_map_val_etype_accept") {
-            config.mqtt_map_val_etype_accept = Some(matches.value_of("mqtt_map_val_etype_accept").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_accept").to_string());
-            info!("Overwrite for payload val of key 'eventType' and default: 'ACCEPT' has been configured: '{:?}'", config.mqtt_map_val_etype_accept);
-        }
-
-        if matches.is_present("mqtt_map_val_etype_resolve") {
-            config.mqtt_map_val_etype_resolve = Some(matches.value_of("mqtt_map_val_etype_resolve").expect("failed to parse mqtt mapping key: mqtt_map_val_etype_resolve").to_string());
-            info!("Overwrite for payload val of key 'eventType' and default: 'RESOLVE' has been configured: '{:?}'", config.mqtt_map_val_etype_resolve);
-        }
+        config = parse_consumer_arguments(&matches, config);
     }
 
     let db_file = matches.value_of("file");
@@ -371,22 +362,83 @@ fn main() -> () {
 
     debug!("Running command: {}.", command);
     match command {
-        "daemon" => run_daemon(&config),
-        "event" => run_event(&matches),
-        "heartbeat" => run_heartbeat(&matches),
-        "cleanup" => run_cleanup(&matches),
+        "daemon" => run_daemon(&config).await,
+        "event" => run_event(matches).await,
+        "heartbeat" => run_heartbeat(matches).await,
+        "cleanup" => run_cleanup(matches).await,
         _ => panic!("Unsupported command provided.") // unreachable
     }
 }
 
+fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
+
+    if matches.is_present("mqtt_username") {
+        config.mqtt_username = Some(matches.value_of("mqtt_username").expect("failed to parse mqtt_username").to_string());
+
+        if matches.is_present("mqtt_password") {
+            config.mqtt_password = Some(matches.value_of("mqtt_password").expect("failed to parse mqtt_password").to_string());
+            info!("mqtt credentials set");
+        }
+    }
+
+    if matches.is_present("filter_key") {
+        config.filter_key = Some(matches.value_of("filter_key").expect("failed to parse mqtt mapping key: filter_key").to_string());
+        info!("Filter key is present: {:?} will be required in event payloads", config.filter_key);
+    }
+
+    if matches.is_present("filter_val") {
+        config.filter_val = Some(matches.value_of("filter_val").expect("failed to parse mqtt mapping key: filter_val").to_string());
+        info!("Filter key value is present, will be required in event payloads");
+    }
+
+    // mappings
+    if matches.is_present("event_key") {
+        config.event_key = Some(matches.value_of("event_key").expect("failed to parse consumer mapping key: event_key").to_string());
+        info!("eventKey has been configured, overwriting events with static key");
+    }
+
+    if matches.is_present("map_key_etype") {
+        config.map_key_etype = Some(matches.value_of("map_key_etype").expect("failed to parse consumer mapping key: map_key_etype").to_string());
+        info!("Overwrite for payload key 'eventType' has been configured: '{:?}'", config.map_key_etype);
+    }
+
+    if matches.is_present("map_key_alert_key") {
+        config.map_key_alert_key = Some(matches.value_of("map_key_alert_key").expect("failed to parse consumer mapping key: map_key_alert_key").to_string());
+        info!("Overwrite for payload key 'alertKey' has been configured: '{:?}'", config.map_key_alert_key);
+    }
+
+    if matches.is_present("map_key_summary") {
+        config.map_key_summary = Some(matches.value_of("map_key_summary").expect("failed to parse consumer mapping key: map_key_summary").to_string());
+        info!("Overwrite for payload key 'summary' has been configured: '{:?}'", config.map_key_summary);
+    }
+
+    if matches.is_present("map_val_etype_alert") {
+        config.map_val_etype_alert = Some(matches.value_of("map_val_etype_alert").expect("failed to parse consumer mapping key: map_val_etype_alert").to_string());
+        info!("Overwrite for payload val of key 'eventType' and default: 'ALERT' has been configured: '{:?}'", config.map_val_etype_alert);
+    }
+
+    if matches.is_present("map_val_etype_accept") {
+        config.map_val_etype_accept = Some(matches.value_of("map_val_etype_accept").expect("failed to parse consumer mapping key: map_val_etype_accept").to_string());
+        info!("Overwrite for payload val of key 'eventType' and default: 'ACCEPT' has been configured: '{:?}'", config.map_val_etype_accept);
+    }
+
+    if matches.is_present("map_val_etype_resolve") {
+        config.map_val_etype_resolve = Some(matches.value_of("map_val_etype_resolve").expect("failed to parse consumer mapping key: map_val_etype_resolve").to_string());
+        info!("Overwrite for payload val of key 'eventType' and default: 'RESOLVE' has been configured: '{:?}'", config.map_val_etype_resolve);
+    }
+
+    config
+}
+
 /**
-    If port is provided starts an http server with proxy functionality /api/events and /api/heartbeats
+    If port is provided starts a http server with proxy functionality /api/events and /api/heartbeats
     Where events are queued in a local SQLite table to ensure delivery
     If provided, pings a heartbeat api key regularly
-    If provided, connects to MQTT broker and proxies events (through queue) and heartbeats
+    If provided, connects to MQTT or Kafka broker and proxies events (through queue) and heartbeats
     If http server or mqtt client is started will also spawn a poll thread to poll the db
+    Kafka will use the consumer offset to ensure at least once delivery, no db polling needed
 */
-fn run_daemon(config: &ILConfig) -> () {
+async fn run_daemon(config: &ILConfig) -> () {
 
     // in case a thread (like mqtt or poll) dies of a panic
     // we want to make sure the whole program exits
@@ -396,60 +448,78 @@ fn run_daemon(config: &ILConfig) -> () {
         process::exit(1);
     }));
 
-    let are_we_running = Arc::new(AtomicBool::new(true));
-    let are_we_running_trigger = are_we_running.clone();
-    ctrlc::set_handler(move || {
-        info!("Received Ctrl+C. Shutting down...");
-        are_we_running_trigger.store(false, Ordering::SeqCst);
-    }).expect("Error setting Ctrl-C handler");
-
     info!("Starting..");
-    let is_poll_needed = config.mqtt_host.is_some() || config.start_http;
 
-    // db is always spawned and migrated up first here in case poll job is active
-    let mut db_web_instance = None;
-    if is_poll_needed {
-        let db = ILDatabase::new(config.db_file.as_str());
-        info!("Migrating DB..");
-        db.prepare_database();
-        db_web_instance = Some(db);
-    }
+    let ilert_client = ILert::new().expect("Failed to create iLert client");
+    let db = ILDatabase::new(config.db_file.as_str());
+    info!("Migrating DB..");
+    db.prepare_database();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config: config.clone(),
+        db: Mutex::new(db),
+        ilert_client
+    });
 
     // poll is only needed if mqtt or web server are running
+    let is_poll_needed = config.mqtt_host.is_some() || config.start_http;
     let mut poll_job = None;
     if is_poll_needed {
         info!("Starting poll job..");
-        poll_job = Some(il_poll::run_poll_job(&config, &are_we_running));
+        let cloned_ctx = daemon_ctx.clone();
+        poll_job = Some(tokio::spawn(async move {
+            il_poll::run_poll_job(cloned_ctx).await;
+        }));
     }
 
     let mut hbt_job = None;
     if config.heartbeat_key.is_some() {
         info!("Running regular heartbeats..");
-        hbt_job = Some(il_hbt::run_hbt_job(&config, &are_we_running));
+        let cloned_ctx = daemon_ctx.clone();
+        hbt_job = Some(tokio::spawn(async move {
+            il_hbt::run_hbt_job(cloned_ctx).await;
+        }));
     }
 
     let mut mqtt_job = None;
     if config.mqtt_host.is_some() {
         info!("Running MQTT thread..");
-        mqtt_job = Some(il_mqtt::run_mqtt_job(&config, &are_we_running))
+        let cloned_ctx = daemon_ctx.clone();
+        // rumqttc spawns its own tokio runtime
+        mqtt_job = Some(tokio::task::spawn_blocking(move || {
+            consumers::il_mqtt::run_mqtt_job(&cloned_ctx.config);
+        }));
+    }
+
+    let mut kafka_job = None;
+    if config.kafka_brokers.is_some() {
+        info!("Running Kafka thread..");
+        let cloned_ctx = daemon_ctx.clone();
+        kafka_job = Some(tokio::spawn(async move {
+            consumers::il_kafka::run_kafka_job(cloned_ctx).await;
+        }));
     }
 
     if config.start_http {
         info!("Starting server..");
-        il_server::run_server(&config, db_web_instance.expect("db instance is needed for http server"));
+        il_server::run_server(daemon_ctx.clone());
         // blocking..
     }
 
     if let Some(handle) = poll_job {
-        handle.join().expect("Failed to join poll thread");
+        handle.await.expect("Failed to join poll thread");
     }
 
     if let Some(handle) = hbt_job {
-        handle.join().expect("Failed to join heartbeat thread");
+        handle.await.expect("Failed to join heartbeat thread");
     }
 
     if let Some(handle) = mqtt_job {
-        handle.join().expect("Failed to join mqtt thread");
+        handle.await.expect("Failed to join mqtt thread");
+    }
+
+    if let Some(handle) = kafka_job {
+        handle.await.expect("Failed to join kafka thread");
     }
 
     ()
@@ -458,7 +528,7 @@ fn run_daemon(config: &ILConfig) -> () {
 /**
     Attempts to create an event, one time - skips queue
 */
-fn run_event(matches: &ArgMatches) -> () {
+async fn run_event(matches: ArgMatches<'_>) -> () {
 
     if !matches.is_present("api_key") {
         return error!("Missing api_key arg (-k, --api_key)");
@@ -534,13 +604,13 @@ fn run_event(matches: &ArgMatches) -> () {
     event.images = images;
     event.links = links;
 
-    il_poll::process_queued_event(&ilert_client, &event);
+    il_poll::process_queued_event(&ilert_client, &event).await;
 }
 
 /**
     Attempts to ping a heartbeat
 */
-fn run_heartbeat(matches: &ArgMatches) -> () {
+async fn run_heartbeat(matches: ArgMatches<'_>) -> () {
 
     if !matches.is_present("api_key") {
         return error!("Missing api_key arg (-k, --api_key)");
@@ -549,15 +619,15 @@ fn run_heartbeat(matches: &ArgMatches) -> () {
     let ilert_client = ILert::new().expect("Failed to create iLert client");
     let api_key = matches.value_of("api_key").unwrap();
 
-    if il_hbt::ping_heartbeat(&ilert_client, api_key) {
+    if il_hbt::ping_heartbeat(&ilert_client, api_key).await {
         info!("Heartbeat ping successful");
     }
 }
 
 /**
-    Attempts to cleanup resources
+    Attempts to clean-up resources
 */
-fn run_cleanup(matches: &ArgMatches) -> () {
+async fn run_cleanup(matches: ArgMatches<'_>) -> () {
 
     if !matches.is_present("api_key") {
         return error!("Missing api_key arg (-k, --api_key)");
@@ -573,7 +643,7 @@ fn run_cleanup(matches: &ArgMatches) -> () {
 
     let resource = matches.value_of("resource").unwrap();
     match resource {
-        "alerts" => il_cleanup::cleanup_alerts(&ilert_client),
+        "alerts" => il_cleanup::cleanup_alerts(&ilert_client).await,
         _ => panic!("Unsupported 'resource' provided.")
     }
 }

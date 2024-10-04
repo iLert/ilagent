@@ -1,56 +1,42 @@
-use std::thread;
-use std::thread::JoinHandle;
+use std::sync::Arc;
 use log::{error};
 use std::time::{Duration, Instant};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{HeartbeatApiResource};
+use crate::DaemonContext;
 
-use crate::il_config::ILConfig;
+pub async fn run_hbt_job(daemon_context: Arc<DaemonContext>) -> () {
 
-pub fn run_hbt_job(config: &ILConfig, are_we_running: &Arc<AtomicBool>) -> JoinHandle<()> {
+    let mut last_run = Instant::now();
 
-    let config = config.clone();
-    let are_we_running = are_we_running.clone();
-    let hbt_thread = thread::spawn(move || {
+    let api_key = daemon_context.config.clone().heartbeat_key
+        .expect("Failed to access heartbeat api key");
+    let api_key = api_key.as_str();
 
-        let ilert_client = ILert::new().expect("Failed to create iLert client");
-        let mut last_run = Instant::now();
+    // kick off call
+    ping_heartbeat(&daemon_context.ilert_client, api_key).await;
 
-        let api_key = config.heartbeat_key
-            .expect("Failed to access heartbeat api key");
-        let api_key = api_key.as_str();
+    loop {
+        tokio::time::sleep(Duration::from_millis(300)).await;
 
-        // kick off call
-        ping_heartbeat(&ilert_client, api_key);
-
-        loop {
-            thread::sleep(Duration::from_millis(300));
-            if !are_we_running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            if last_run.elapsed().as_millis() < 30000 {
-                continue;
-            } else {
-                last_run = Instant::now();
-            }
-
-            ping_heartbeat(&ilert_client, api_key);
+        if last_run.elapsed().as_millis() < 30000 {
+            continue;
+        } else {
+            last_run = Instant::now();
         }
-    });
 
-    hbt_thread
+        ping_heartbeat(&daemon_context.ilert_client, api_key).await;
+    }
 }
 
-pub fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> bool {
+pub async fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> bool {
 
     let hbt_result = ilert_client
         .get()
         .heartbeat(api_key)
-        .execute();
+        .execute()
+        .await;
 
     match hbt_result {
         Ok(result) => {
