@@ -25,25 +25,35 @@ The ilert agent comes in a single binary with a small footprint and helps you to
 
 ### Docker image
 
-You can grab the latest release from [Docker hub](https://hub.docker.com/r/ilert/ilagent)
+You can grab the latest official image from [Docker hub](https://hub.docker.com/r/ilert/ilagent)
 
-```shell script
+```sh
 docker run ilert/ilagent
 ```
 
-### Install script
+### Compile the binary from source
 
-For MacOS and Linux we also provide this one-liner to automatically install the agent:
+> Note: requires Rust to be installed, see https://rustup.rs
 
-> Note: default prebuild support stopped at version 0.3.0 if you cannot use the docker image or compile yourself and need new builds please open an issue
-
-```shell script
-curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | bash -
+```sh
+git clone git@github.com:iLert/ilagent.git
+cd ilagent
+cargo build --release
+cd ./target/release
+./ilagent --help
 ```
 
 ### Pre-build releases
 
-> Note: default prebuild support stopped at version 0.3.0 if you cannot use the docker image or compile yourself and need new builds please open an issue
+> Note: default prebuild support stopped at version 0.3.0 if you cannot use the docker image or cant compile yourself and need new builds please open an issue
+
+#### Install script
+
+For MacOS and Linux we also provide this one-liner to automatically install the agent:
+
+```shell script
+curl -sL https://raw.githubusercontent.com/iLert/ilagent/master/install.sh | bash -
+```
 
 We provide pre compiled binaries for every major OS on the [release page of this repository](https://github.com/iLert/ilagent/releases).
 
@@ -166,6 +176,13 @@ ilagent daemon -v -v \
     --filter_val 'ALARM'
 ```
 
+## Liveness probes
+
+When providing the `-p 8977` port argument the agent will start its http server.
+Providing both a `GET /ready` and a `GET /health` endpoint, these are currently static, but will be dynamic in the future.
+Additionally, we recommend providing the `-b il1hbt123...` heartbeat argument with the integration key of a heartbeat alert source
+to periodically ping the source.
+
 ## Getting help
 
 We are happy to respond to [GitHub issues][issues] as well.
@@ -177,7 +194,7 @@ We are happy to respond to [GitHub issues][issues] as well.
 ### Cross-Compiling
 
 Of course, you can also grab the source code and compile it yourself.
-Requires cross (`cargo install cross`) to be installed.
+Requires cross (`cargo install cross` for Apple Silicon support: `cargo install cross --git https://github.com/cross-rs/cross`) to be installed.
 
 - Mac (or your host): `cargo build --release`
 - Linux: `cross build --release --target x86_64-unknown-linux-gnu`

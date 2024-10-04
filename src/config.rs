@@ -39,7 +39,7 @@ impl ILConfig {
             http_host: "0.0.0.0".to_string(),
             http_port: 8977,
             start_http: false,
-            http_worker_count: 2,
+            http_worker_count: 1,
             db_file: "./ilagent.db3".to_string(),
             heartbeat_key: None,
             mqtt_host: None,

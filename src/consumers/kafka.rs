@@ -34,20 +34,18 @@ impl ConsumerContext for CustomContext {
 
 type LoggingConsumer = StreamConsumer<CustomContext>;
 
-pub async fn run_kafka_job(daemon_context: Arc<DaemonContext>) -> () {
+pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let (version_n, version_s) = get_rdkafka_version();
     info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
 
-    let context = CustomContext;
-
-    let event_topic = if let Some(topic) = daemon_context.config.clone().event_topic {
+    let event_topic = if let Some(topic) = daemon_ctx.config.clone().event_topic {
         topic.clone()
     } else {
         "".to_string()
     };
 
-    let heartbeat_topic = if let Some(topic) = daemon_context.config.clone().heartbeat_topic {
+    let heartbeat_topic = if let Some(topic) = daemon_ctx.config.clone().heartbeat_topic {
         topic.clone()
     } else {
         "".to_string()
@@ -61,9 +59,10 @@ pub async fn run_kafka_job(daemon_context: Arc<DaemonContext>) -> () {
         topics.push(heartbeat_topic.as_str());
     }
 
-    let brokers = daemon_context.config.clone().kafka_brokers.expect("no broker");
-    let group_id = daemon_context.config.clone().kafka_group_id.expect("no group id");
+    let brokers = daemon_ctx.config.clone().kafka_brokers.expect("no broker");
+    let group_id = daemon_ctx.config.clone().kafka_group_id.expect("no group id");
 
+    let context = CustomContext;
     let consumer: LoggingConsumer = ClientConfig::new()
         .set("group.id", group_id)
         .set("bootstrap.servers", brokers)
@@ -114,9 +113,9 @@ pub async fn run_kafka_job(daemon_context: Arc<DaemonContext>) -> () {
                 } */
 
                 let should_retry: bool = if m.topic().eq(event_topic.as_str()) {
-                    handle_event_message(daemon_context.clone(), message_key, payload, m.topic()).await
+                    handle_event_message(daemon_ctx.clone(), message_key, payload, m.topic()).await
                 } else if m.topic().eq(heartbeat_topic.as_str()) {
-                    handle_heartbeat_message(daemon_context.clone(), message_key, payload).await
+                    handle_heartbeat_message(daemon_ctx.clone(), message_key, payload).await
                 } else {
                     warn!("Received Kafka message from unsubscribed topic: {}", m.topic());
                     // will commit these anyway

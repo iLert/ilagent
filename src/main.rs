@@ -1,14 +1,13 @@
-use log::{debug, info, error};
+use log::{debug, info, error, warn};
 use env_logger::Env;
 use std::sync::Arc;
 use clap::{Arg, App, ArgMatches};
 use std::panic;
 use std::process;
-
+use std::sync::atomic::{AtomicBool, Ordering};
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
-use tokio::sync::{Mutex};
-
+use tokio::sync::Mutex;
 use config::ILConfig;
 use db::ILDatabase;
 use crate::models::event_db::EventQueueItem;
@@ -19,13 +18,14 @@ mod models;
 mod hbt;
 mod consumers;
 mod poll;
-mod server;
+mod http_server;
 mod cleanup;
 
 pub struct DaemonContext {
     pub config: ILConfig,
     pub db: Mutex<ILDatabase>,
-    pub ilert_client: ILert
+    pub ilert_client: ILert,
+    pub running: AtomicBool
 }
 
 #[tokio::main]
@@ -353,6 +353,11 @@ async fn main() -> () {
         }
 
         config = parse_consumer_arguments(&matches, config);
+        // kafka enforces http, to exit properly
+        if !config.start_http {
+            config.start_http = true;
+            warn!("The current version of ilagent, enforces the http server when kafka is used");
+        }
     }
 
     let db_file = matches.value_of("file");
@@ -439,16 +444,13 @@ fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
     Kafka will use the consumer offset to ensure at least once delivery, no db polling needed
 */
 async fn run_daemon(config: &ILConfig) -> () {
+    info!("Starting daemon..");
 
-    // in case a thread (like mqtt or poll) dies of a panic
-    // we want to make sure the whole program exits
     let orig_hook = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
         orig_hook(panic_info);
         process::exit(1);
     }));
-
-    info!("Starting..");
 
     let ilert_client = ILert::new().expect("Failed to create ilert client");
     let db = ILDatabase::new(config.db_file.as_str());
@@ -458,8 +460,18 @@ async fn run_daemon(config: &ILConfig) -> () {
     let daemon_ctx = Arc::new(DaemonContext {
         config: config.clone(),
         db: Mutex::new(db),
-        ilert_client
+        ilert_client,
+        running: AtomicBool::new(true)
     });
+
+    // kafka stream will not exit when ctrlc hook is present
+    if config.kafka_brokers.is_none() {
+        let ctrlc_ctx = daemon_ctx.clone();
+        ctrlc::set_handler(move || {
+            info!("Received Ctrl+C. Shutting down threads...");
+            ctrlc_ctx.running.store(false, Ordering::Relaxed);
+        }).expect("Error setting Ctrl-C handler");
+    }
 
     // poll is only needed if mqtt or web server are running
     let is_poll_needed = config.mqtt_host.is_some() || config.start_http;
@@ -487,40 +499,47 @@ async fn run_daemon(config: &ILConfig) -> () {
         let cloned_ctx = daemon_ctx.clone();
         // rumqttc spawns its own tokio runtime
         mqtt_job = Some(tokio::task::spawn_blocking(move || {
-            consumers::mqtt::run_mqtt_job(&cloned_ctx.config);
+            consumers::mqtt::run_mqtt_job(cloned_ctx);
         }));
     }
 
-    let mut kafka_job = None;
+    // let mut kafka_job = None;
     if config.kafka_brokers.is_some() {
         info!("Running Kafka thread..");
         let cloned_ctx = daemon_ctx.clone();
-        kafka_job = Some(tokio::spawn(async move {
+        tokio::spawn(async move {
             consumers::kafka::run_kafka_job(cloned_ctx).await;
-        }));
+        });
     }
 
     if config.start_http {
-        info!("Starting server..");
-        server::run_server(daemon_ctx.clone());
-        // blocking..
+        http_server::run_server(daemon_ctx.clone()).await;
+        // blocking...
+        debug!("http ended");
+        daemon_ctx.running.store(false, Ordering::Relaxed);
     }
 
     if let Some(handle) = poll_job {
         handle.await.expect("Failed to join poll thread");
+        debug!("poll ended");
     }
 
     if let Some(handle) = hbt_job {
         handle.await.expect("Failed to join heartbeat thread");
+        debug!("hbt ended");
     }
 
     if let Some(handle) = mqtt_job {
+        info!("waiting for mqtt to drop connections...");
         handle.await.expect("Failed to join mqtt thread");
+        debug!("mqtt ended");
     }
 
+    /* as soon as actix or ctrcl_handler is used the kafka streaming consumer will not shut down
     if let Some(handle) = kafka_job {
         handle.await.expect("Failed to join kafka thread");
-    }
+        info!("kafka ended");
+    } */
 
     ()
 }

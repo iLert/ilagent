@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use log::{error};
 use std::time::{Duration, Instant};
 
@@ -6,18 +7,18 @@ use ilert::ilert::ILert;
 use ilert::ilert_builders::{HeartbeatApiResource};
 use crate::DaemonContext;
 
-pub async fn run_hbt_job(daemon_context: Arc<DaemonContext>) -> () {
+pub async fn run_hbt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mut last_run = Instant::now();
 
-    let api_key = daemon_context.config.clone().heartbeat_key
+    let api_key = daemon_ctx.config.clone().heartbeat_key
         .expect("Failed to access heartbeat api key");
     let api_key = api_key.as_str();
 
     // kick off call
-    ping_heartbeat(&daemon_context.ilert_client, api_key).await;
+    ping_heartbeat(&daemon_ctx.ilert_client, api_key).await;
 
-    loop {
+    while daemon_ctx.running.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(300)).await;
 
         if last_run.elapsed().as_millis() < 30000 {
@@ -26,7 +27,7 @@ pub async fn run_hbt_job(daemon_context: Arc<DaemonContext>) -> () {
             last_run = Instant::now();
         }
 
-        ping_heartbeat(&daemon_context.ilert_client, api_key).await;
+        ping_heartbeat(&daemon_ctx.ilert_client, api_key).await;
     }
 }
 

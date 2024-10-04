@@ -1,2 +1,2 @@
 #!/bin/bash
-cargo run -- daemon -p 8977 -v -v
+cargo run -- daemon -p 8977 -v -v -b 123

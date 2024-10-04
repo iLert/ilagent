@@ -2,25 +2,26 @@ use log::{info, error};
 use std::time::{Duration};
 use rumqttc::{MqttOptions, Client, QoS, Incoming, Event};
 use std::{str, thread};
-
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use ilert::ilert::ILert;
 
 use crate::db::ILDatabase;
 use crate::config::ILConfig;
-use crate::hbt;
+use crate::{hbt, DaemonContext};
 use crate::models::event::EventQueueItemJson;
 
-pub fn run_mqtt_job(config: &ILConfig) -> () {
+pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mut connected = false;
     let mut recon_attempts = 0;
 
-    let db = ILDatabase::new(config.db_file.as_str());
+    let db = ILDatabase::new(daemon_ctx.config.db_file.as_str());
 
-    let mqtt_host = config.mqtt_host.clone().expect("Missing mqtt host");
-    let mqtt_port = config.mqtt_port.clone().expect("Missing mqtt port");
+    let mqtt_host = daemon_ctx.config.mqtt_host.clone().expect("Missing mqtt host");
+    let mqtt_port = daemon_ctx.config.mqtt_port.clone().expect("Missing mqtt port");
     let mut mqtt_options = MqttOptions::new(
-        config.mqtt_name.clone().expect("Missing mqtt name"),
+        daemon_ctx.config.mqtt_name.clone().expect("Missing mqtt name"),
         mqtt_host.as_str(),
         mqtt_port,
     );
@@ -30,16 +31,16 @@ pub fn run_mqtt_job(config: &ILConfig) -> () {
         .set_pending_throttle(Duration::from_secs(1))
         .set_clean_session(false);
 
-    if let Some(mqtt_username) = config.mqtt_username.clone() {
+    if let Some(mqtt_username) = daemon_ctx.config.mqtt_username.clone() {
         mqtt_options.set_credentials(mqtt_username.as_str(),
-                                     config.mqtt_password.clone()
+                                     daemon_ctx.config.mqtt_password.clone()
                                          .expect("mqtt_username is set, expecting mqtt_password to be set as well").as_str());
     }
 
     let (client, mut connection) = Client::new(mqtt_options, 10);
 
-    let event_topic = config.event_topic.clone().expect("Missing mqtt event topic");
-    let heartbeat_topic = config.heartbeat_topic.clone().expect("Missing mqtt heartbeat topic");
+    let event_topic = daemon_ctx.config.event_topic.clone().expect("Missing mqtt event topic");
+    let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().expect("Missing mqtt heartbeat topic");
 
     client.subscribe(event_topic.as_str(), QoS::AtMostOnce)
         .expect("Failed to subscribe to mqtt event topic");
@@ -53,6 +54,10 @@ pub fn run_mqtt_job(config: &ILConfig) -> () {
 
         info!("Connecting to Mqtt server..");
         for (_i, invoke) in connection.iter().enumerate() {
+
+            if !daemon_ctx.running.load(Ordering::Relaxed) {
+                break;
+            }
 
             match invoke {
                 Err(e) => {
@@ -85,17 +90,22 @@ pub fn run_mqtt_job(config: &ILConfig) -> () {
                     if heartbeat_topic == message.topic {
                         handle_heartbeat_message(payload);
                     } else if event_topic == message.topic {
-                        handle_event_message(&config, &db, payload, message.topic.as_str());
+                        handle_event_message(&daemon_ctx.config, &db, payload, message.topic.as_str());
                     } else {
 
                         // with filters event processing might subscribe to wildcards
                         if event_topic.contains("#") || event_topic.contains("+") {
-                            handle_event_message(&config, &db, payload, message.topic.as_str());
+                            handle_event_message(&daemon_ctx.config, &db, payload, message.topic.as_str());
                         }
                     }
                 },
                 _ => continue
             }
+        }
+
+        // faster exits
+        if !daemon_ctx.running.load(Ordering::Relaxed) {
+            break;
         }
 
         // fallback, in case mqtt connection drops all the time

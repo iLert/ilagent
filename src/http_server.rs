@@ -23,6 +23,14 @@ async fn get_index(_req: HttpRequest) -> impl Responder {
         .body("ilagent/0.5.0")
 }
 
+async fn get_ready(_req: HttpRequest) -> impl Responder {
+    HttpResponse::NoContent().finish()
+}
+
+async fn get_health(_req: HttpRequest) -> impl Responder {
+    HttpResponse::NoContent().finish()
+}
+
 async fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, _req: HttpRequest, path: web::Path<(String,)>) -> impl Responder {
 
     let container = container.lock().await;
@@ -83,6 +91,14 @@ fn config_app(cfg: &mut web::ServiceConfig) {
                     .route(web::get().to(get_index)) // /
     );
 
+    cfg.service(web::resource("/ready")
+                    .route(web::get().to(get_ready))
+    );
+
+    cfg.service(web::resource("/health")
+                    .route(web::get().to(get_health))
+    );
+
     cfg.service(web::resource("/api/events")
                     .route(web::post().to(post_event)) // POST
     );
@@ -93,18 +109,19 @@ fn config_app(cfg: &mut web::ServiceConfig) {
     );
 }
 
-pub fn run_server(daemon_context: Arc<DaemonContext>) -> () {
-    let addr = daemon_context.config.get_http_bind_str().clone();
-    let db = ILDatabase::new(daemon_context.config.db_file.as_str());
+pub async fn run_server(daemon_ctx: Arc<DaemonContext>) -> () {
+    let addr = daemon_ctx.config.get_http_bind_str().clone();
+    let db = ILDatabase::new(daemon_ctx.config.db_file.as_str());
     let ilert_client = ILert::new().expect("failed to create ilert client");
+    info!("Starting HTTP server @ {}", addr);
     let container = web::Data::new(Mutex::new(WebContextContainer{ db, ilert_client }));
     let server = HttpServer::new(move|| App::new()
         .app_data(container.clone())
         .wrap(middleware::Logger::default())
         .app_data(web::JsonConfig::default().limit(16000))
         .configure(config_app))
-        .workers(daemon_context.config.http_worker_count.try_into().expect("Failed to get http worker count"))
+        .workers(daemon_ctx.config.http_worker_count.try_into().expect("Failed to get http worker count"))
         .bind(addr.as_str())
         .expect("Failed to bind to http port");
-    let _ = server.run();
+    let _ = server.run().await;
 }
