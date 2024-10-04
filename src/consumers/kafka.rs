@@ -11,7 +11,7 @@ use rdkafka::message::{Message};
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::util::get_rdkafka_version;
 use serde_json::json;
-use crate::{il_hbt, il_poll, DaemonContext};
+use crate::{hbt, poll, DaemonContext};
 use crate::models::event::EventQueueItemJson;
 
 struct CustomContext;
@@ -139,7 +139,7 @@ pub async fn run_kafka_job(daemon_context: Arc<DaemonContext>) -> () {
 async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str, payload: &str) -> bool {
     let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
     if let Some(heartbeat) = parsed {
-        if il_hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.apiKey.as_str()).await {
+        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.apiKey.as_str()).await {
             info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.apiKey.as_str());
         }
     }
@@ -156,7 +156,7 @@ async fn handle_event_message(daemon_context: Arc<DaemonContext>, key: &str, pay
             "kafka_topic": topic
         }));
         let db_event_format = EventQueueItemJson::to_db(event);
-        let should_retry = il_poll::process_queued_event(&daemon_context.ilert_client, &db_event_format).await;
+        let should_retry = poll::process_queued_event(&daemon_context.ilert_client, &db_event_format).await;
         should_retry
     } else {
         false

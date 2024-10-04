@@ -9,18 +9,18 @@ use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
 use tokio::sync::{Mutex};
 
-use il_config::ILConfig;
-use il_db::ILDatabase;
+use config::ILConfig;
+use db::ILDatabase;
 use crate::models::event_db::EventQueueItem;
 
-mod il_config;
-mod il_db;
+mod config;
+mod db;
 mod models;
-mod il_hbt;
+mod hbt;
 mod consumers;
-mod il_poll;
-mod il_server;
-mod il_cleanup;
+mod poll;
+mod server;
+mod cleanup;
 
 pub struct DaemonContext {
     pub config: ILConfig,
@@ -450,7 +450,7 @@ async fn run_daemon(config: &ILConfig) -> () {
 
     info!("Starting..");
 
-    let ilert_client = ILert::new().expect("Failed to create iLert client");
+    let ilert_client = ILert::new().expect("Failed to create ilert client");
     let db = ILDatabase::new(config.db_file.as_str());
     info!("Migrating DB..");
     db.prepare_database();
@@ -468,7 +468,7 @@ async fn run_daemon(config: &ILConfig) -> () {
         info!("Starting poll job..");
         let cloned_ctx = daemon_ctx.clone();
         poll_job = Some(tokio::spawn(async move {
-            il_poll::run_poll_job(cloned_ctx).await;
+            poll::run_poll_job(cloned_ctx).await;
         }));
     }
 
@@ -477,7 +477,7 @@ async fn run_daemon(config: &ILConfig) -> () {
         info!("Running regular heartbeats..");
         let cloned_ctx = daemon_ctx.clone();
         hbt_job = Some(tokio::spawn(async move {
-            il_hbt::run_hbt_job(cloned_ctx).await;
+            hbt::run_hbt_job(cloned_ctx).await;
         }));
     }
 
@@ -487,7 +487,7 @@ async fn run_daemon(config: &ILConfig) -> () {
         let cloned_ctx = daemon_ctx.clone();
         // rumqttc spawns its own tokio runtime
         mqtt_job = Some(tokio::task::spawn_blocking(move || {
-            consumers::il_mqtt::run_mqtt_job(&cloned_ctx.config);
+            consumers::mqtt::run_mqtt_job(&cloned_ctx.config);
         }));
     }
 
@@ -496,13 +496,13 @@ async fn run_daemon(config: &ILConfig) -> () {
         info!("Running Kafka thread..");
         let cloned_ctx = daemon_ctx.clone();
         kafka_job = Some(tokio::spawn(async move {
-            consumers::il_kafka::run_kafka_job(cloned_ctx).await;
+            consumers::kafka::run_kafka_job(cloned_ctx).await;
         }));
     }
 
     if config.start_http {
         info!("Starting server..");
-        il_server::run_server(daemon_ctx.clone());
+        server::run_server(daemon_ctx.clone());
         // blocking..
     }
 
@@ -542,7 +542,7 @@ async fn run_event(matches: ArgMatches<'_>) -> () {
         return error!("Missing summary arg (-s, --summary)");
     }
 
-    let ilert_client = ILert::new().expect("Failed to create iLert client");
+    let ilert_client = ILert::new().expect("Failed to create ilert client");
     let api_key = matches.value_of("api_key").unwrap();
     let event_type = matches.value_of("event_type").unwrap();
     let summary = matches.value_of("summary").unwrap();
@@ -604,7 +604,7 @@ async fn run_event(matches: ArgMatches<'_>) -> () {
     event.images = images;
     event.links = links;
 
-    il_poll::process_queued_event(&ilert_client, &event).await;
+    poll::process_queued_event(&ilert_client, &event).await;
 }
 
 /**
@@ -616,10 +616,10 @@ async fn run_heartbeat(matches: ArgMatches<'_>) -> () {
         return error!("Missing api_key arg (-k, --api_key)");
     }
 
-    let ilert_client = ILert::new().expect("Failed to create iLert client");
+    let ilert_client = ILert::new().expect("Failed to create ilert client");
     let api_key = matches.value_of("api_key").unwrap();
 
-    if il_hbt::ping_heartbeat(&ilert_client, api_key).await {
+    if hbt::ping_heartbeat(&ilert_client, api_key).await {
         info!("Heartbeat ping successful");
     }
 }
@@ -638,12 +638,12 @@ async fn run_cleanup(matches: ArgMatches<'_>) -> () {
     }
 
     let api_key = matches.value_of("api_key").unwrap();
-    let mut ilert_client = ILert::new().expect("Failed to create iLert client");
+    let mut ilert_client = ILert::new().expect("Failed to create ilert client");
     ilert_client.auth_via_token(api_key).expect("Failed to set api key");
 
     let resource = matches.value_of("resource").unwrap();
     match resource {
-        "alerts" => il_cleanup::cleanup_alerts(&ilert_client).await,
+        "alerts" => cleanup::cleanup_alerts(&ilert_client).await,
         _ => panic!("Unsupported 'resource' provided.")
     }
 }

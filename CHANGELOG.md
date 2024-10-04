@@ -1,5 +1,14 @@
 # ilagent CHANGELOG
 
+## 2024-10-04, Version 0.5.0
+
+* upgraded dependencies
+* migrated from sync threads to a tokio app
+* **BREAKING** --mqtt_* prefixed event mapping arguments have dropped the prefix to fit to other consumers as well
+* now supporting Apache Kafka to event API proxy
+* bumped the docker image to rust 1.81
+* bumped SQLite version from 3.41.2 -> 3.46.0
+
 ## 2023-05-13, Version 0.4.0
 
 * upgraded dependencies

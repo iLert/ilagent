@@ -3,6 +3,7 @@
 target/
 examples/
 CHANGELOG.md
-demo.gif
+docs/misc/demo.gif
 install.sh
 *.db3
+docs/

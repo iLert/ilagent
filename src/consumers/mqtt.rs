@@ -5,9 +5,9 @@ use std::{str, thread};
 
 use ilert::ilert::ILert;
 
-use crate::il_db::ILDatabase;
-use crate::il_config::ILConfig;
-use crate::il_hbt;
+use crate::db::ILDatabase;
+use crate::config::ILConfig;
+use crate::hbt;
 use crate::models::event::EventQueueItemJson;
 
 pub fn run_mqtt_job(config: &ILConfig) -> () {
@@ -112,8 +112,8 @@ fn handle_heartbeat_message(payload: &str) -> () {
     if let Some(heartbeat) = parsed {
         let _ = tokio::spawn(async move {
             // this is a hack to allow the .await call in this context, it is not really smart to create a new client with each call
-            let ilert_client = ILert::new().expect("Failed to create iLert client");
-            if il_hbt::ping_heartbeat(&ilert_client, heartbeat.apiKey.as_str()).await {
+            let ilert_client = ILert::new().expect("Failed to create ilert client");
+            if hbt::ping_heartbeat(&ilert_client, heartbeat.apiKey.as_str()).await {
                 info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.apiKey.as_str());
             }
         });

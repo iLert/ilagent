@@ -8,8 +8,8 @@ use serde_json::json;
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{ILertEventType, ILertPriority};
 
-use crate::il_db::{ILDatabase};
-use crate::{il_hbt, DaemonContext};
+use crate::db::{ILDatabase};
+use crate::{hbt, DaemonContext};
 use crate::models::event::EventQueueItemJson;
 
 struct WebContextContainer {
@@ -29,7 +29,7 @@ async fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, _req: H
 
     let api_key = &path.0;
 
-    match il_hbt::ping_heartbeat(&container.ilert_client, api_key).await {
+    match hbt::ping_heartbeat(&container.ilert_client, api_key).await {
         true => {
             info!("Proxied heartbeat {}", api_key);
             HttpResponse::Accepted().json(json!({}))

@@ -1,2 +1,2 @@
-pub mod il_kafka;
-pub mod il_mqtt;
+pub mod kafka;
+pub mod mqtt;

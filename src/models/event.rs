@@ -1,7 +1,7 @@
 use ilert::ilert_builders::{EventImage, EventLink, ILertEventType};
 use log::{debug, error, warn};
 use serde_derive::{Deserialize, Serialize};
-use crate::il_config::ILConfig;
+use crate::config::ILConfig;
 use crate::models::event_db::EventQueueItem;
 
 #[allow(non_snake_case)]
