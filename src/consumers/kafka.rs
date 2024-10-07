@@ -150,12 +150,15 @@ async fn handle_event_message(daemon_context: Arc<DaemonContext>, key: &str, pay
     let parsed = EventQueueItemJson::parse_event_json(&daemon_context.config, payload, topic);
     if let Some(mut event) = parsed {
         // info!("Event queue item: {:?}", event);
-        event.customDetails = Some(json!({
-            "kafka_key": key,
-            "kafka_topic": topic
-        }));
-        let db_event_format = EventQueueItemJson::to_db(event);
-        let should_retry = poll::process_queued_event(&daemon_context.ilert_client, &db_event_format).await;
+        if event.customDetails.is_none() {
+            event.customDetails = Some(json!({
+                "messageKey": key,
+                "topic": topic
+            }));
+        }
+        let event_api_path = format!("/v1/events/kafka/{}", event.apiKey.as_str());
+        let db_event_format = EventQueueItemJson::to_db(event, Some(event_api_path));
+        let should_retry = poll::send_queued_event(&daemon_context.ilert_client, &db_event_format).await;
         should_retry
     } else {
         false

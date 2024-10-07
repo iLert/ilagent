@@ -1,5 +1,9 @@
 # ilagent CHANGELOG
 
+## 2024-10-07, Version 0.5.1
+
+* added option to send event message payloads directly to integration endpoint targets
+
 ## 2024-10-04, Version 0.5.0
 
 * upgraded dependencies

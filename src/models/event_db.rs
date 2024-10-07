@@ -13,7 +13,8 @@ pub struct EventQueueItem {
     pub priority: Option<String>,
     pub images: Option<String>,
     pub links: Option<String>,
-    pub custom_details: Option<String>
+    pub custom_details: Option<String>,
+    pub event_api_path: Option<String>
 }
 
 impl EventQueueItem {
@@ -30,7 +31,8 @@ impl EventQueueItem {
             priority: None,
             images: None,
             links: None,
-            custom_details: None
+            custom_details: None,
+            event_api_path: None
         }
     }
 
@@ -47,7 +49,8 @@ impl EventQueueItem {
             priority: None,
             images: None,
             links: None,
-            custom_details: None
+            custom_details: None,
+            event_api_path: None
         }
     }
 }

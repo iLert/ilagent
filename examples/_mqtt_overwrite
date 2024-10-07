@@ -1,6 +1,6 @@
 #!/bin/bash
 cargo run -- daemon -v -v \
-    -m 127.0.0.1 -q 1883 -n ilagent -e '#' \
+    -m localhost -q 1883 -n ilagent -e '#' \
     --event_key 'il1api123...' \
     --map_key_alert_key 'mCode' \
     --map_key_summary 'comment' \

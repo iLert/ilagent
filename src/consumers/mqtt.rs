@@ -5,7 +5,7 @@ use std::{str, thread};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use ilert::ilert::ILert;
-
+use serde_json::json;
 use crate::db::ILDatabase;
 use crate::config::ILConfig;
 use crate::{hbt, DaemonContext};
@@ -132,8 +132,14 @@ fn handle_heartbeat_message(payload: &str) -> () {
 
 fn handle_event_message(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) -> () {
     let parsed = crate::models::event::EventQueueItemJson::parse_event_json(&config, payload, topic);
-    if let Some(event) = parsed {
-        let db_event = EventQueueItemJson::to_db(event);
+    if let Some(mut event) = parsed {
+        if event.customDetails.is_none() {
+            event.customDetails = Some(json!({
+                "topic": topic
+            }));
+        }
+        let event_api_path = format!("/v1/events/mqtt/{}", event.apiKey.as_str());
+        let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
         let insert_result = db.create_il_event(&db_event);
         match insert_result {
             Ok(res) => match res {

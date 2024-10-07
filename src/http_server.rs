@@ -54,7 +54,7 @@ async fn post_event(_req: HttpRequest, container: web::Data<Mutex<WebContextCont
     let container = container.lock().await;
 
     let event = event.into_inner();
-    let event = EventQueueItemJson::to_db(event);
+    let event = EventQueueItemJson::to_db(event, None);
 
     if ILertEventType::from_str(event.event_type.as_str()).is_err() {
         return HttpResponse::BadRequest().json(json!({ "error": "Unsupported value for field 'eventType'." }));

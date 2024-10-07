@@ -623,7 +623,7 @@ async fn run_event(matches: ArgMatches<'_>) -> () {
     event.images = images;
     event.links = links;
 
-    poll::process_queued_event(&ilert_client, &event).await;
+    poll::send_queued_event(&ilert_client, &event).await;
 }
 
 /**

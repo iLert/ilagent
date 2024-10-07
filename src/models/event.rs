@@ -51,7 +51,7 @@ impl EventQueueItemJson {
         }
     }
 
-    pub fn to_db(item: EventQueueItemJson) -> EventQueueItem {
+    pub fn to_db(item: EventQueueItemJson, event_api_path: Option<String>) -> EventQueueItem {
 
         let images = match item.images {
             Some(v) => {
@@ -91,7 +91,8 @@ impl EventQueueItemJson {
             priority: item.priority,
             images,
             links,
-            custom_details
+            custom_details,
+            event_api_path
         }
     }
 

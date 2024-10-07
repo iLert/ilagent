@@ -37,7 +37,7 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<EventQueueItem>) -> () {
 
     for event in events.iter() {
-        let should_retry = process_queued_event(&daemon_ctx.ilert_client, event).await;
+        let should_retry = send_queued_event(&daemon_ctx.ilert_client, event).await;
         let event_id = event.id.clone().unwrap_or("".to_string());
         if !should_retry {
             let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
@@ -51,7 +51,7 @@ async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<Event
     }
 }
 
-pub async fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
+pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
 
     let parsed_event = EventQueueItemJson::from_db(event.clone());
 
@@ -79,8 +79,15 @@ pub async fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) 
         None => None
     };
 
-    let post_result = ilert_client
-        .create()
+    let mut post_request = ilert_client.create();
+
+    if let Some(event_api_path) = event.event_api_path.as_ref() {
+        post_request.builder.options.path = Some(event_api_path.to_string());
+    } else {
+        post_request.builder.options.path = Some("/events".to_string());
+    }
+
+    let post_result = post_request
         .event_with_details(
             event.api_key.as_str(),
             event_type,
@@ -92,7 +99,7 @@ pub async fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) 
             parsed_event.links,
             parsed_event.customDetails,
             None
-            )
+        )
         .execute()
         .await;
 
@@ -115,6 +122,11 @@ pub async fn process_queued_event(ilert_client: &ILert, event: &EventQueueItem) 
     if status == 429 {
         warn!("Event {} failed too many requests", event_id);
         return true; // too many requests, retry
+    }
+
+    if status == 404 {
+        warn!("Event {} failed with bad URL {}, potentially due to bad api key value", event_id, response.url);
+        return false; // no point in retrying
     }
 
     if status > 499 {

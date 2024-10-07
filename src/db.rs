@@ -10,6 +10,7 @@ use crate::models::event_db::EventQueueItem;
 const DB_MIGRATION_VAL: &str = "1";
 const DB_MIGRATION_V1: &str = "mig_1";
 const DB_MIGRATION_V2: &str = "mig_2";
+const DB_MIGRATION_V3: &str = "mig_3";
 
 #[derive(Debug)]
 struct ILAgentItem {
@@ -94,6 +95,19 @@ impl ILDatabase {
             self.set_il_val(DB_MIGRATION_V2, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v2, set)");
             info!("Database migrated to {}", DB_MIGRATION_V2);
+        }
+
+        let mig_3 = self.get_il_value(DB_MIGRATION_V3);
+        if mig_3.is_none() {
+
+            self.conn.execute(
+                "ALTER TABLE event_items ADD COLUMN event_api_path TEXT NULL",
+                [],
+            ).expect("Database migration failed (v3, 1)");
+
+            self.set_il_val(DB_MIGRATION_V3, DB_MIGRATION_VAL)
+                .expect("Database migration failed (v3, set)");
+            info!("Database migrated to {}", DB_MIGRATION_V3);
         }
 
         /*
@@ -186,13 +200,15 @@ impl ILDatabase {
             images: row.get(7).unwrap_or(None),
             links: row.get(8).unwrap_or(None),
             custom_details: row.get(9).unwrap_or(None),
-            details: row.get(10).unwrap_or(None)
+            details: row.get(10).unwrap_or(None),
+            event_api_path: row.get(11).unwrap_or(None)
         })
     }
 
     pub fn get_il_event(&self, event_id: &str) -> Result<Option<EventQueueItem>, rusqlite::Error> {
 
-        let mut stmt = self.conn.prepare("SELECT * FROM event_items WHERE id = ?1").unwrap();
+        let mut stmt = self.conn.prepare("SELECT id, api_key, event_type, alert_key, summary, created_at,
+         priority, images, links, custom_details, details, event_api_path FROM event_items WHERE id = ?1")?;
         let query_result = stmt
             .query_map(&[&event_id], |row| {
                 ILDatabase::convert_db_row_to_event(row)
@@ -231,7 +247,8 @@ impl ILDatabase {
 
     pub fn get_il_events(&self, limit: i32) -> Result<Vec<EventQueueItem>,  rusqlite::Error> {
 
-        let mut stmt = self.conn.prepare("SELECT * FROM event_items ORDER BY inserted_at ASC LIMIT ?1").unwrap();
+        let mut stmt = self.conn.prepare("SELECT id, api_key, event_type, alert_key, summary, created_at,
+         priority, images, links, custom_details, details, event_api_path FROM event_items ORDER BY inserted_at ASC LIMIT ?1")?;
         let query_result = stmt
             .query_map(&[&limit], |row| {
                 ILDatabase::convert_db_row_to_event(row)
@@ -276,11 +293,12 @@ impl ILDatabase {
 
         let insert_result = self.conn.execute(
             "INSERT INTO event_items (api_key, event_type, alert_key, summary, created_at, id,
-                priority, images, links, custom_details, details)
-                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                priority, images, links, custom_details, details, event_api_path)
+                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             &[&item.api_key as &dyn ToSql, &item.event_type, &item.alert_key,
                 &item.summary, created_at, &item_id,
-                &item.priority, &item.images, &item.links, &item.custom_details, &item.details],
+                &item.priority, &item.images, &item.links, &item.custom_details, &item.details,
+                &item.event_api_path],
         );
 
         match insert_result {
