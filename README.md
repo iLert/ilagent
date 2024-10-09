@@ -16,7 +16,7 @@ The ilert agent comes in a single binary with a small footprint and helps you to
 * Run a proxy server with retry-queue for HTTP events and heartbeats on premise `ilagent daemon -p 8977`
 * Run a proxy server with retry-queue for MQTT events and heartbeats on premise `ilagent daemon -m 192.168.1.14`
 * Run a proxy server with retry behaviour for Apache Kafka messages on premise `ilagent daemon --kafka_brokers localhost:9092`
-* Map and filter your MQTT or Kafka events to alerts [see](#Mapping-MQTT-or-Apache-Kafka-messages-to-events)
+* Map and filter your MQTT or Kafka events to alerts [see](#mapping-consumer-messages-to-events)
 * Clean-up your open alerts (mass resolve) `ilagent cleanup -k your-api-key --resource alerts`
 
 <p align="center"><img src="/docs/misc/froggo.png?raw=true"/></p>
