@@ -4,7 +4,7 @@ use log::{error};
 use std::time::{Duration, Instant};
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{HeartbeatApiResource};
+use ilert::ilert_builders::{HeartbeatApiResource, PingApiResource};
 use crate::DaemonContext;
 
 pub async fn run_hbt_job(daemon_ctx: Arc<DaemonContext>) -> () {
@@ -33,11 +33,19 @@ pub async fn run_hbt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
 pub async fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> bool {
 
-    let hbt_result = ilert_client
-        .get()
-        .heartbeat(api_key)
-        .execute()
-        .await;
+    let hbt_result = if api_key.starts_with("ih2:") {
+        ilert_client
+            .head()
+            .ping(api_key)
+            .execute()
+            .await
+    } else {
+        ilert_client
+            .get()
+            .heartbeat(api_key)
+            .execute()
+            .await
+    };
 
     match hbt_result {
         Ok(result) => {
