@@ -1,5 +1,11 @@
 # ilagent CHANGELOG
 
+## 2025-12-21, Version 0.5.2
+
+* upgraded dependencies
+* bumped the docker image to rust 1.91
+* using new ilert-rust:5.0.1 to send new heartbeat keys to 2.0 architecture
+
 ## 2024-10-07, Version 0.5.1
 
 * added option to send event message payloads directly to integration endpoint targets
