@@ -77,7 +77,7 @@ to monitor the uptime of the agent
 - The agent will buffer events locally (except in kafka mode) using SQLite3 it will therefore require file system access in `daemon` mode
 - Running detached: `nohup sh -c 'ilagent daemon -m 192.168.1.14 -b il1hbt123... -v -v'  > ./ilagent.log 2>&1 &`
 
-You can always run `ilagent --help` or take a look at our [documentation](https://docs.ilert.com/ilagent) for help.
+You can always run `ilagent --help` or take a look at our [documentation](https://docs.ilert.com/developer-docs/client-libraries/ilagent)) for help.
 
 # Consumers
 
