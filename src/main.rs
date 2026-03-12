@@ -8,27 +8,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
 use tokio::sync::Mutex;
-use config::ILConfig;
-use db::ILDatabase;
-use crate::models::event_db::EventQueueItem;
 
-mod config;
-mod db;
-mod models;
-mod hbt;
-mod consumers;
-mod poll;
-mod http_server;
-mod cleanup;
+use ilagent::config::ILConfig;
+use ilagent::db::ILDatabase;
+use ilagent::models::event_db::EventQueueItem;
+use ilagent::{DaemonContext, hbt, poll, consumers, http_server, cleanup};
 
-pub struct DaemonContext {
-    pub config: ILConfig,
-    pub db: Mutex<ILDatabase>,
-    pub ilert_client: ILert,
-    pub running: AtomicBool
-}
-
-fn consumer_args() -> Vec<Arg> {
+pub fn consumer_args() -> Vec<Arg> {
     vec![
         Arg::new("event_topic")
             .short('e')
@@ -79,7 +65,7 @@ fn consumer_args() -> Vec<Arg> {
     ]
 }
 
-fn build_cli() -> Command {
+pub fn build_cli() -> Command {
     let mut daemon_cmd = Command::new("daemon")
         .about("Run the agent as a daemon with optional HTTP server, MQTT, and Kafka consumers")
         .arg(Arg::new("port")
@@ -272,7 +258,7 @@ async fn main() {
     }
 }
 
-fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
+pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
 
     let default_port = config.get_port_as_string().clone();
@@ -335,7 +321,7 @@ fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILC
     config
 }
 
-fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
+pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
 
     if let Some(username) = matches.get_one::<String>("mqtt_username") {
         config.mqtt_username = Some(username.to_string());

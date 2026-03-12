@@ -12,15 +12,15 @@ use crate::db::{ILDatabase};
 use crate::{hbt, DaemonContext};
 use crate::models::event::EventQueueItemJson;
 
-struct WebContextContainer {
-    db: ILDatabase,
-    ilert_client: ILert
+pub struct WebContextContainer {
+    pub db: ILDatabase,
+    pub ilert_client: ILert
 }
 
 async fn get_index(_req: HttpRequest) -> impl Responder {
     HttpResponse::Ok()
         .content_type("text/plain")
-        .body("ilagent/0.5.0")
+        .body(format!("ilagent/{}", env!("CARGO_PKG_VERSION")))
 }
 
 async fn get_ready(_req: HttpRequest) -> impl Responder {
@@ -85,7 +85,7 @@ async fn post_event(_req: HttpRequest, container: web::Data<Mutex<WebContextCont
     }
 }
 
-fn config_app(cfg: &mut web::ServiceConfig) {
+pub fn config_app(cfg: &mut web::ServiceConfig) {
 
     cfg.service(web::resource("/")
                     .route(web::get().to(get_index)) // /
