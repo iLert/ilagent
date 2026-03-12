@@ -25,3 +25,4 @@ rdkafka = { version = "0.39", features = ["cmake-build"] }
 actix-rt = "2"
 tempfile = "3"
 wiremock = "0.6"
+testcontainers = "0.23"
