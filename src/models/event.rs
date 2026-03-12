@@ -162,10 +162,8 @@ impl EventQueueItemJson {
         }
         let mut parsed = parsed.unwrap();
 
-        let config = config.clone();
-
         // event filter check
-        if let Some(filter_key) = config.filter_key {
+        if let Some(ref filter_key) = config.filter_key {
             let val_opt = json.get(filter_key);
 
             if val_opt.is_none() {
@@ -173,7 +171,7 @@ impl EventQueueItemJson {
                 return None;
             }
 
-            if let Some(filter_val) = config.filter_val {
+            if let Some(ref filter_val) = config.filter_val {
                 let val = val_opt.expect("failed to unwrap event filter val opt");
                 if let Some(val) = val.as_str() {
                     if !filter_val.eq(val) {
@@ -186,13 +184,13 @@ impl EventQueueItemJson {
 
         // overwrite api key
 
-        if let Some(event_key) = config.event_key {
+        if let Some(ref event_key) = config.event_key {
             parsed.apiKey = Some(event_key.clone());
         }
 
         // mappings
 
-        if let Some(map_key_alert_key) = config.map_key_alert_key {
+        if let Some(ref map_key_alert_key) = config.map_key_alert_key {
             let val_opt = json.get(map_key_alert_key);
             if let Some(val) = val_opt {
                 if let Some(val) = val.as_str() {
@@ -201,7 +199,7 @@ impl EventQueueItemJson {
             }
         }
 
-        if let Some(map_key_summary) = config.map_key_summary {
+        if let Some(ref map_key_summary) = config.map_key_summary {
             let val_opt = json.get(map_key_summary);
             if let Some(val) = val_opt {
                 if let Some(val) = val.as_str() {
@@ -211,7 +209,7 @@ impl EventQueueItemJson {
         }
 
         let mut event_type = "".to_string();
-        if let Some(map_key_etype) = config.map_key_etype {
+        if let Some(ref map_key_etype) = config.map_key_etype {
             let val_opt = json.get(map_key_etype);
             if let Some(val) = val_opt {
                 if let Some(val) = val.as_str() {
@@ -221,19 +219,19 @@ impl EventQueueItemJson {
             }
         }
 
-        if let Some(map_val_etype_alert) = config.map_val_etype_alert {
+        if let Some(ref map_val_etype_alert) = config.map_val_etype_alert {
             if map_val_etype_alert.eq(event_type.as_str()) {
                 parsed.eventType = Some(ILertEventType::ALERT.as_str().to_string());
             }
         }
 
-        if let Some(map_val_etype_accept) = config.map_val_etype_accept {
+        if let Some(ref map_val_etype_accept) = config.map_val_etype_accept {
             if map_val_etype_accept.eq(event_type.as_str()) {
                 parsed.eventType = Some(ILertEventType::ACCEPT.as_str().to_string());
             }
         }
 
-        if let Some(map_val_etype_resolve) = config.map_val_etype_resolve {
+        if let Some(ref map_val_etype_resolve) = config.map_val_etype_resolve {
             if map_val_etype_resolve.eq(event_type.as_str()) {
                 parsed.eventType = Some(ILertEventType::RESOLVE.as_str().to_string());
             }
