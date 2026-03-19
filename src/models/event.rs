@@ -7,7 +7,8 @@ use crate::models::event_db::EventQueueItem;
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventQueueItemJson {
-    pub apiKey: String,
+    #[serde(alias = "apiKey")]
+    pub integrationKey: String,
     pub eventType: String,
     pub summary: String,
     pub details: Option<String>,
@@ -24,7 +25,8 @@ helper to apply additional consumer mappings easier
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventQueueTransitionItemJson {
-    pub apiKey: Option<String>,
+    #[serde(alias = "apiKey")]
+    pub integrationKey: Option<String>,
     pub eventType: Option<String>,
     pub summary: Option<String>,
     pub details: Option<String>,
@@ -39,7 +41,7 @@ impl EventQueueItemJson {
 
     pub fn from_transition(trans: EventQueueTransitionItemJson) -> EventQueueItemJson {
         EventQueueItemJson {
-            apiKey: trans.apiKey.unwrap_or("".to_string()),
+            integrationKey: trans.integrationKey.unwrap_or("".to_string()),
             eventType: trans.eventType.unwrap_or("ALERT".to_string()),
             summary: trans.summary.unwrap_or("".to_string()), // field is optional for some event types
             details: trans.details,
@@ -82,7 +84,7 @@ impl EventQueueItemJson {
 
         EventQueueItem {
             id: None,
-            api_key: item.apiKey,
+            integration_key: item.integrationKey,
             event_type: item.eventType,
             alert_key: item.alertKey,
             summary: item.summary,
@@ -132,7 +134,7 @@ impl EventQueueItemJson {
         };
 
         EventQueueItemJson {
-            apiKey: item.api_key,
+            integrationKey: item.integration_key,
             eventType: item.event_type,
             summary: item.summary,
             details: item.details,
@@ -185,7 +187,7 @@ impl EventQueueItemJson {
         // overwrite api key
 
         if let Some(ref event_key) = config.event_key {
-            parsed.apiKey = Some(event_key.clone());
+            parsed.integrationKey = Some(event_key.clone());
         }
 
         // mappings

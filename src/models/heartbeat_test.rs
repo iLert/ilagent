@@ -7,7 +7,7 @@ mod tests {
         let payload = r#"{"apiKey": "il1hbt123abc"}"#;
         let result = HeartbeatJson::parse_heartbeat_json(payload);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().apiKey, "il1hbt123abc");
+        assert_eq!(result.unwrap().integrationKey, "il1hbt123abc");
     }
 
     #[test]
@@ -34,6 +34,6 @@ mod tests {
         let payload = r#"{"apiKey": "key123", "extra": "value"}"#;
         let result = HeartbeatJson::parse_heartbeat_json(payload);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().apiKey, "key123");
+        assert_eq!(result.unwrap().integrationKey, "key123");
     }
 }

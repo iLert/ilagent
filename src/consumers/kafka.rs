@@ -137,8 +137,8 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
 async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str, payload: &str) -> bool {
     let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
     if let Some(heartbeat) = parsed {
-        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.apiKey.as_str()).await {
-            info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.apiKey.as_str());
+        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.integrationKey.as_str()).await {
+            info!("Heartbeat {} pinged, triggered by kafka message", heartbeat.integrationKey.as_str());
         }
     }
 
@@ -149,7 +149,7 @@ async fn handle_event_message(daemon_context: Arc<DaemonContext>, key: &str, pay
     let default_details = json!({"messageKey": key, "topic": topic});
     let parsed = super::prepare_consumer_event(&daemon_context.config, payload, topic, default_details);
     if let Some(event) = parsed {
-        let event_api_path = super::build_event_api_path("kafka", &event.apiKey);
+        let event_api_path = super::build_event_api_path("kafka", &event.integrationKey);
         let db_event_format = crate::models::event::EventQueueItemJson::to_db(event, Some(event_api_path));
         let should_retry = poll::send_queued_event(&daemon_context.ilert_client, &db_event_format).await;
         should_retry

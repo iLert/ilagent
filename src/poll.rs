@@ -89,7 +89,7 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
 
     let post_result = post_request
         .event_with_details(
-            event.api_key.as_str(),
+            event.integration_key.as_str(),
             event_type,
             Some(event.summary.clone()),
             event.alert_key.clone(),

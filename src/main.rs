@@ -133,12 +133,12 @@ pub fn build_cli() -> Command {
 
     let event_cmd = Command::new("event")
         .about("Send a single event to ilert")
-        .arg(Arg::new("api_key")
+        .arg(Arg::new("integration_key")
             .short('k')
-            .long("api_key")
-            .value_name("APIKEY")
+            .long("integration_key")
+            .value_name("INTEGRATION_KEY")
             .required(true)
-            .help("Sets the API key"))
+            .help("Sets the integration key"))
         .arg(Arg::new("event_type")
             .short('t')
             .long("event_type")
@@ -181,12 +181,12 @@ pub fn build_cli() -> Command {
 
     let heartbeat_cmd = Command::new("heartbeat")
         .about("Send a single heartbeat ping to ilert")
-        .arg(Arg::new("api_key")
+        .arg(Arg::new("integration_key")
             .short('k')
-            .long("api_key")
-            .value_name("APIKEY")
+            .long("integration_key")
+            .value_name("INTEGRATION_KEY")
             .required(true)
-            .help("Sets the API key"));
+            .help("Sets the integration key"));
 
     let cleanup_cmd = Command::new("cleanup")
         .about("Clean up ilert resources")
@@ -203,7 +203,7 @@ pub fn build_cli() -> Command {
             .help("Sets the resource target to clean up"));
 
     Command::new("ilert Agent")
-        .version("0.5.2")
+        .version(env!("CARGO_PKG_VERSION"))
         .author("ilert GmbH. <support@ilert.com>")
         .about("ilert Agent - The swiss army knife.")
         .subcommand_required(true)
@@ -520,7 +520,7 @@ mod tests {
         assert!(m.is_ok());
         let sub = m.unwrap();
         let event_m = sub.subcommand_matches("event").unwrap();
-        assert_eq!(event_m.get_one::<String>("api_key").unwrap(), "key1");
+        assert_eq!(event_m.get_one::<String>("integration_key").unwrap(), "key1");
         assert_eq!(event_m.get_one::<String>("event_type").unwrap(), "ALERT");
         assert_eq!(event_m.get_one::<String>("summary").unwrap(), "test");
     }
@@ -542,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_heartbeat_requires_api_key() {
+    fn cli_heartbeat_requires_integration_key() {
         let result = build_cli().try_get_matches_from(vec!["ilagent", "heartbeat"]);
         assert!(result.is_err());
     }
@@ -775,7 +775,7 @@ mod tests {
 */
 async fn run_event(matches: &ArgMatches) {
     let ilert_client = ILert::new().expect("Failed to create ilert client");
-    let api_key = matches.get_one::<String>("api_key").unwrap();
+    let integration_key = matches.get_one::<String>("integration_key").unwrap();
     let event_type = matches.get_one::<String>("event_type").unwrap();
     let summary = matches.get_one::<String>("summary").unwrap();
 
@@ -812,7 +812,7 @@ async fn run_event(matches: &ArgMatches) {
     }
 
     let mut event = EventQueueItem::new_with_required(
-        api_key, event_type, summary, alert_key);
+        integration_key, event_type, summary, alert_key);
 
     event.id = Some("provided".to_string()); // prettier logs
     event.priority = priority;
@@ -828,9 +828,9 @@ async fn run_event(matches: &ArgMatches) {
 */
 async fn run_heartbeat(matches: &ArgMatches) {
     let ilert_client = ILert::new().expect("Failed to create ilert client");
-    let api_key = matches.get_one::<String>("api_key").unwrap();
+    let integration_key = matches.get_one::<String>("integration_key").unwrap();
 
-    if hbt::ping_heartbeat(&ilert_client, api_key).await {
+    if hbt::ping_heartbeat(&ilert_client, integration_key).await {
         info!("Heartbeat ping successful");
     }
 }

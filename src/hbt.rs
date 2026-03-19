@@ -4,19 +4,19 @@ use log::{error};
 use std::time::{Duration, Instant};
 
 use ilert::ilert::ILert;
-use ilert::ilert_builders::PingApiResource;
+use ilert::ilert_builders::{HeartbeatApiResource, PingApiResource};
 use crate::DaemonContext;
 
 pub async fn run_hbt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mut last_run = Instant::now();
 
-    let api_key = daemon_ctx.config.clone().heartbeat_key
-        .expect("Failed to access heartbeat api key");
-    let api_key = api_key.as_str();
+    let integration_key = daemon_ctx.config.clone().heartbeat_key
+        .expect("Failed to access heartbeat integration key");
+    let integration_key = integration_key.as_str();
 
     // kick off call
-    ping_heartbeat(&daemon_ctx.ilert_client, api_key).await;
+    ping_heartbeat(&daemon_ctx.ilert_client, integration_key).await;
 
     while daemon_ctx.running.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -27,17 +27,26 @@ pub async fn run_hbt_job(daemon_ctx: Arc<DaemonContext>) -> () {
             last_run = Instant::now();
         }
 
-        ping_heartbeat(&daemon_ctx.ilert_client, api_key).await;
+        ping_heartbeat(&daemon_ctx.ilert_client, integration_key).await;
     }
 }
 
-pub async fn ping_heartbeat(ilert_client: &ILert, api_key: &str) -> bool {
+pub async fn ping_heartbeat(ilert_client: &ILert, integration_key: &str) -> bool {
 
-    let hbt_result = ilert_client
-        .head()
-        .ping(api_key)
-        .execute()
-        .await;
+    #[allow(deprecated)] // heartbeat() is deprecated in ilert crate but required for legacy il1hbt keys
+    let hbt_result = if integration_key.starts_with("il1hbt") {
+        ilert_client
+            .get()
+            .heartbeat(integration_key)
+            .execute()
+            .await
+    } else {
+        ilert_client
+            .head()
+            .ping(integration_key)
+            .execute()
+            .await
+    };
 
     match hbt_result {
         Ok(result) => {

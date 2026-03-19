@@ -85,7 +85,7 @@ async fn post_event_valid_inserts_to_db() {
     assert_eq!(resp.status(), 200);
 
     let body: serde_json::Value = test::read_body_json(resp).await;
-    assert_eq!(body["apiKey"], "il1api123");
+    assert_eq!(body["integrationKey"], "il1api123");
     assert_eq!(body["eventType"], "ALERT");
     assert_eq!(body["summary"], "Server down");
     assert_eq!(body["alertKey"], "host-1");
@@ -94,7 +94,7 @@ async fn post_event_valid_inserts_to_db() {
     let c = container.lock().await;
     let events = c.db.get_il_events(10).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].api_key, "il1api123");
+    assert_eq!(events[0].integration_key, "il1api123");
     assert_eq!(events[0].summary, "Server down");
 }
 

@@ -16,7 +16,7 @@ mod tests {
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
         let event = result.unwrap();
-        assert_eq!(event.apiKey, "il1api123");
+        assert_eq!(event.integrationKey, "il1api123");
         assert_eq!(event.eventType, "ALERT");
         assert_eq!(event.summary, "Server down");
     }
@@ -43,7 +43,7 @@ mod tests {
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
         let event = result.unwrap();
-        assert_eq!(event.apiKey, "");
+        assert_eq!(event.integrationKey, "");
         assert_eq!(event.eventType, "ALERT");
     }
 
@@ -62,7 +62,7 @@ mod tests {
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
         let event = result.unwrap();
-        assert_eq!(event.apiKey, "key1");
+        assert_eq!(event.integrationKey, "key1");
         assert_eq!(event.eventType, "RESOLVE");
         assert_eq!(event.summary, "Resolved");
         assert_eq!(event.details.unwrap(), "Detail text");
@@ -80,7 +80,7 @@ mod tests {
         let payload = r#"{"apiKey": "original-key", "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().apiKey, "static-key");
+        assert_eq!(result.unwrap().integrationKey, "static-key");
     }
 
     // --- parse_event_json: field mappings ---
@@ -177,7 +177,7 @@ mod tests {
         let result = EventQueueItemJson::parse_event_json(&config, payload, "factory/alarms");
         assert!(result.is_some());
         let event = result.unwrap();
-        assert_eq!(event.apiKey, "static-api-key");
+        assert_eq!(event.integrationKey, "static-api-key");
         assert_eq!(event.eventType, "ALERT");
         assert_eq!(event.alertKey.unwrap(), "M-100");
         assert_eq!(event.summary, "Pump failure");
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn from_transition_defaults() {
         let trans = EventQueueTransitionItemJson {
-            apiKey: None,
+            integrationKey: None,
             eventType: None,
             summary: None,
             details: None,
@@ -259,7 +259,7 @@ mod tests {
             customDetails: None,
         };
         let event = EventQueueItemJson::from_transition(trans);
-        assert_eq!(event.apiKey, "");
+        assert_eq!(event.integrationKey, "");
         assert_eq!(event.eventType, "ALERT");
         assert_eq!(event.summary, "");
     }
@@ -269,7 +269,7 @@ mod tests {
     #[test]
     fn to_db_and_from_db_round_trip() {
         let original = EventQueueItemJson {
-            apiKey: "key1".to_string(),
+            integrationKey: "key1".to_string(),
             eventType: "ALERT".to_string(),
             summary: "Something broke".to_string(),
             details: Some("details here".to_string()),
@@ -281,11 +281,11 @@ mod tests {
         };
 
         let db_item = EventQueueItemJson::to_db(original.clone(), Some("/v1/events/mqtt/key1".to_string()));
-        assert_eq!(db_item.api_key, "key1");
+        assert_eq!(db_item.integration_key, "key1");
         assert_eq!(db_item.event_api_path.as_ref().unwrap(), "/v1/events/mqtt/key1");
 
         let restored = EventQueueItemJson::from_db(db_item);
-        assert_eq!(restored.apiKey, "key1");
+        assert_eq!(restored.integrationKey, "key1");
         assert_eq!(restored.eventType, "ALERT");
         assert_eq!(restored.summary, "Something broke");
         assert_eq!(restored.details.unwrap(), "details here");

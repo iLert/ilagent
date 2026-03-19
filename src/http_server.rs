@@ -35,11 +35,11 @@ async fn get_heartbeat(container: web::Data<Mutex<WebContextContainer>>, _req: H
 
     let container = container.lock().await;
 
-    let api_key = &path.0;
+    let integration_key = &path.0;
 
-    match hbt::ping_heartbeat(&container.ilert_client, api_key).await {
+    match hbt::ping_heartbeat(&container.ilert_client, integration_key).await {
         true => {
-            info!("Proxied heartbeat {}", api_key);
+            info!("Proxied heartbeat {}", integration_key);
             HttpResponse::Accepted().json(json!({}))
         },
         false => HttpResponse::InternalServerError().body("Failed to proxy heartbeat")

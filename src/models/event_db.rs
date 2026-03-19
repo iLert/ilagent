@@ -4,7 +4,7 @@ use serde_derive::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EventQueueItem {
     pub id: Option<String>,
-    pub api_key: String,
+    pub integration_key: String,
     pub event_type: String,
     pub alert_key: Option<String>,
     pub summary: String,
@@ -22,7 +22,7 @@ impl EventQueueItem {
     pub fn new() -> EventQueueItem {
         EventQueueItem {
             id: None,
-            api_key: "".to_string(),
+            integration_key: "".to_string(),
             event_type: ILertEventType::ALERT.as_str().to_string(),
             alert_key: None,
             summary: "".to_string(),
@@ -36,11 +36,11 @@ impl EventQueueItem {
         }
     }
 
-    pub fn new_with_required(api_key: &str, event_type: &str, summary: &str,
+    pub fn new_with_required(integration_key: &str, event_type: &str, summary: &str,
                              alert_key: Option<String>) -> EventQueueItem {
         EventQueueItem {
             id: None,
-            api_key: api_key.to_string(),
+            integration_key: integration_key.to_string(),
             event_type: event_type.to_string(),
             alert_key,
             summary: summary.to_string(),

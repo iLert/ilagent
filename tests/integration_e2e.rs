@@ -62,7 +62,7 @@ async fn e2e_post_event_poll_deliver_and_delete() {
         let c = container.lock().await;
         let events = c.db.get_il_events(10).unwrap();
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].api_key, "il1api123");
+        assert_eq!(events[0].integration_key, "il1api123");
     }
 
     // 3. Simulate poll: read from DB, send to mock ilert, delete on success
@@ -163,7 +163,7 @@ async fn e2e_mqtt_event_uses_custom_path() {
         "factory/sensors"
     ).unwrap();
 
-    let api_path = format!("/v1/events/mqtt/{}", json_event.apiKey);
+    let api_path = format!("/v1/events/mqtt/{}", json_event.integrationKey);
     let db_event = EventQueueItemJson::to_db(json_event, Some(api_path));
     let inserted = db.create_il_event(&db_event).unwrap().unwrap();
 

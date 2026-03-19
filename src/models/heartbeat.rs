@@ -4,7 +4,8 @@ use serde_derive::{Deserialize, Serialize};
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HeartbeatJson {
-    pub apiKey: String
+    #[serde(alias = "apiKey")]
+    pub integrationKey: String
 }
 
 impl HeartbeatJson {

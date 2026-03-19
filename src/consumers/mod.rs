@@ -12,8 +12,8 @@ pub fn prepare_consumer_event(config: &ILConfig, payload: &str, topic: &str, def
     Some(event)
 }
 
-pub fn build_event_api_path(consumer_type: &str, api_key: &str) -> String {
-    format!("/v1/events/{}/{}", consumer_type, api_key)
+pub fn build_event_api_path(consumer_type: &str, integration_key: &str) -> String {
+    format!("/v1/events/{}/{}", consumer_type, integration_key)
 }
 
 #[cfg(test)]

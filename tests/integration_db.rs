@@ -44,14 +44,14 @@ fn insert_and_read_event() {
     let inserted = db.create_il_event(&event).unwrap().unwrap();
 
     assert!(inserted.id.is_some());
-    assert_eq!(inserted.api_key, "key1");
+    assert_eq!(inserted.integration_key, "key1");
     assert_eq!(inserted.event_type, "ALERT");
     assert_eq!(inserted.summary, "Server down");
     assert_eq!(inserted.alert_key.unwrap(), "alert-1");
 
     // read back by id
     let fetched = db.get_il_event(inserted.id.as_ref().unwrap()).unwrap().unwrap();
-    assert_eq!(fetched.api_key, "key1");
+    assert_eq!(fetched.integration_key, "key1");
     assert_eq!(fetched.summary, "Server down");
 }
 

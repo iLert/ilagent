@@ -104,7 +104,7 @@ async fn mqtt_event_lands_in_db() {
     let db = ILDatabase::new(&db_path);
     let events = db.get_il_events(10).unwrap();
     assert_eq!(events.len(), 1, "expected 1 event in DB");
-    assert_eq!(events[0].api_key, "mqtt-test-key");
+    assert_eq!(events[0].integration_key, "mqtt-test-key");
     assert_eq!(events[0].event_type, "ALERT");
     assert_eq!(events[0].summary, "MQTT e2e test");
     assert_eq!(events[0].alert_key.as_ref().unwrap(), "mqtt-host-1");
@@ -333,7 +333,7 @@ async fn mqtt_event_with_config_mappings() {
     let db = ILDatabase::new(&db_path);
     let events = db.get_il_events(10).unwrap();
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0].api_key, "static-api-key");
+    assert_eq!(events[0].integration_key, "static-api-key");
     assert_eq!(events[0].event_type, "ALERT"); // "SET" mapped to ALERT
     assert_eq!(events[0].summary, "Pump failure detected");
     assert_eq!(events[0].alert_key.as_ref().unwrap(), "M-100");

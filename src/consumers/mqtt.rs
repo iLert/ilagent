@@ -33,8 +33,8 @@ pub fn prepare_mqtt_event(config: &ILConfig, payload: &str, topic: &str) -> Opti
     super::prepare_consumer_event(config, payload, topic, json!({"topic": topic}))
 }
 
-pub fn build_event_api_path(api_key: &str) -> String {
-    super::build_event_api_path("mqtt", api_key)
+pub fn build_event_api_path(integration_key: &str) -> String {
+    super::build_event_api_path("mqtt", integration_key)
 }
 
 fn build_tls_transport(config: &ILConfig) -> Transport {
@@ -173,8 +173,8 @@ fn handle_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) {
     if let Some(heartbeat) = parsed {
         let ctx = daemon_ctx.clone();
         let _ = tokio::spawn(async move {
-            if hbt::ping_heartbeat(&ctx.ilert_client, heartbeat.apiKey.as_str()).await {
-                info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.apiKey.as_str());
+            if hbt::ping_heartbeat(&ctx.ilert_client, heartbeat.integrationKey.as_str()).await {
+                info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.integrationKey.as_str());
             }
         });
     }
@@ -182,7 +182,7 @@ fn handle_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) {
 
 fn handle_event_message(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) -> () {
     if let Some(event) = prepare_mqtt_event(config, payload, topic) {
-        let event_api_path = build_event_api_path(&event.apiKey);
+        let event_api_path = build_event_api_path(&event.integrationKey);
         let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
         let insert_result = db.create_il_event(&db_event);
         match insert_result {
@@ -303,7 +303,7 @@ mod tests {
         config.map_key_summary = Some("msg".to_string());
         let payload = r#"{"msg": "Disk full"}"#;
         let event = prepare_mqtt_event(&config, payload, "monitoring/disk").unwrap();
-        assert_eq!(event.apiKey, "overwritten-key");
+        assert_eq!(event.integrationKey, "overwritten-key");
         assert_eq!(event.summary, "Disk full");
     }
 
@@ -343,14 +343,14 @@ mod tests {
         let payload = r#"{"state": "SET", "mCode": "M-100", "comment": "Pump failure"}"#;
         let event = prepare_mqtt_event(&config, payload, "factory/alarms").unwrap();
 
-        assert_eq!(event.apiKey, "static-key");
+        assert_eq!(event.integrationKey, "static-key");
         assert_eq!(event.eventType, "ALERT");
         assert_eq!(event.summary, "Pump failure");
         assert_eq!(event.alertKey.as_ref().unwrap(), "M-100");
 
-        let api_path = build_event_api_path(&event.apiKey);
+        let api_path = build_event_api_path(&event.integrationKey);
         let db_item = EventQueueItemJson::to_db(event, Some(api_path));
-        assert_eq!(db_item.api_key, "static-key");
+        assert_eq!(db_item.integration_key, "static-key");
         assert_eq!(db_item.event_api_path.unwrap(), "/v1/events/mqtt/static-key");
         assert_eq!(db_item.event_type, "ALERT");
 
