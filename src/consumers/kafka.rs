@@ -12,7 +12,6 @@ use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::util::get_rdkafka_version;
 use serde_json::json;
 use crate::{hbt, poll, DaemonContext};
-use crate::models::event::EventQueueItemJson;
 
 struct CustomContext;
 
@@ -138,8 +137,8 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
 async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str, payload: &str) -> bool {
     let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
     if let Some(heartbeat) = parsed {
-        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.apiKey.as_str()).await {
-            info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.apiKey.as_str());
+        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.integrationKey.as_str()).await {
+            info!("Heartbeat {} pinged, triggered by kafka message", heartbeat.integrationKey.as_str());
         }
     }
 
@@ -147,17 +146,11 @@ async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str
 }
 
 async fn handle_event_message(daemon_context: Arc<DaemonContext>, key: &str, payload: &str, topic: &str) -> bool {
-    let parsed = EventQueueItemJson::parse_event_json(&daemon_context.config, payload, topic);
-    if let Some(mut event) = parsed {
-        // info!("Event queue item: {:?}", event);
-        if event.customDetails.is_none() {
-            event.customDetails = Some(json!({
-                "messageKey": key,
-                "topic": topic
-            }));
-        }
-        let event_api_path = format!("/v1/events/kafka/{}", event.apiKey.as_str());
-        let db_event_format = EventQueueItemJson::to_db(event, Some(event_api_path));
+    let default_details = json!({"messageKey": key, "topic": topic});
+    let parsed = super::prepare_consumer_event(&daemon_context.config, payload, topic, default_details);
+    if let Some(event) = parsed {
+        let event_api_path = super::build_event_api_path("kafka", &event.integrationKey);
+        let db_event_format = crate::models::event::EventQueueItemJson::to_db(event, Some(event_api_path));
         let should_retry = poll::send_queued_event(&daemon_context.ilert_client, &db_event_format).await;
         should_retry
     } else {

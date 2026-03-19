@@ -1,5 +1,18 @@
 # ilagent CHANGELOG
 
+## 2026-03-19, Version 0.6.0
+
+* **BREAKING** CLI now uses subcommands: `daemon`, `event`, `heartbeat`, `cleanup` (previously positional argument)
+* **BREAKING** `--api_key` renamed to `--integration_key` for `event` and `heartbeat` commands (`-k` shorthand still works)
+* added MQTT TLS support with `--mqtt_tls`, `--mqtt_ca`, `--mqtt_client_cert`, `--mqtt_client_key`
+* streamlined consumer message preparation for MQTT and Kafka into shared helpers
+* preserved legacy heartbeat support for `il1hbt` prefixed keys via old heartbeat endpoint
+* exponential backoff for MQTT reconnects (capped at 30s), replacing linear delay
+* version string now derived from Cargo.toml instead of hardcoded
+* refactored codebase into library (`lib.rs`) for better testability
+* added comprehensive unit tests, integration tests, and e2e tests (wiremock, testcontainers)
+* upgraded dependencies: tokio 1.50, actix-web 4.13, rdkafka 0.39, uuid 1.22
+
 ## 2025-12-21, Version 0.5.2
 
 * upgraded dependencies
