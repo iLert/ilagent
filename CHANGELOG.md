@@ -1,5 +1,15 @@
 # ilagent CHANGELOG
 
+## 2026-03-20, Version 0.6.1
+
+* **BREAKING** `cleanup` command no longer accepts `--api_key` argument, API key must be provided via `ILERT_API_KEY` environment variable
+* `event` and `heartbeat` commands now fall back to `ILERT_INTEGRATION_KEY` env var when `--integration_key` is not provided
+* added escalation policy consumer mode for MQTT and Kafka with `--policy_topic`, `--policy_routing_keys`, `--map_key_email`, `--map_key_shift`
+* policy mode resolves routing keys via `/escalation-policies/resolve`, users via `POST /users/resolve`, and updates levels via `PUT /escalation-policies/{id}/levels/{shift}`
+* dot-notation support for `--map_key_email` and `--map_key_shift` (e.g. `data.email`, `user.info.mail`)
+* bumped Rust Docker image from 1.91 to 1.93
+* upgraded ilert-rust SDK from 5.0.1 to 5.1.0
+
 ## 2026-03-19, Version 0.6.0
 
 * **BREAKING** CLI now uses subcommands: `daemon`, `event`, `heartbeat`, `cleanup` (previously positional argument)

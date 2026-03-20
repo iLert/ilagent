@@ -6,12 +6,14 @@ use uuid::Uuid;
 
 use ilert::ilert_builders::{ILertEventType};
 use crate::models::event_db::EventQueueItem;
+use crate::models::mqtt_queue::MqttQueueItem;
 
 const DB_MIGRATION_VAL: &str = "1";
 const DB_MIGRATION_V1: &str = "mig_1";
 const DB_MIGRATION_V2: &str = "mig_2";
 const DB_MIGRATION_V3: &str = "mig_3";
 const DB_MIGRATION_V4: &str = "mig_4";
+const DB_MIGRATION_V5: &str = "mig_5";
 
 #[derive(Debug)]
 struct ILAgentItem {
@@ -122,6 +124,24 @@ impl ILDatabase {
             self.set_il_val(DB_MIGRATION_V4, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v4, set)");
             info!("Database migrated to {}", DB_MIGRATION_V4);
+        }
+
+        let mig_5 = self.get_il_value(DB_MIGRATION_V5);
+        if mig_5.is_none() {
+
+            self.conn.execute(
+                "CREATE TABLE mqtt_queue (
+                      id                 TEXT PRIMARY KEY,
+                      topic              TEXT NOT NULL,
+                      payload            TEXT NOT NULL,
+                      inserted_at        DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
+                  )",
+                [],
+            ).expect("Database migration failed (v5)");
+
+            self.set_il_val(DB_MIGRATION_V5, DB_MIGRATION_VAL)
+                .expect("Database migration failed (v5, set)");
+            info!("Database migrated to {}", DB_MIGRATION_V5);
         }
 
         /*
@@ -326,6 +346,38 @@ impl ILDatabase {
     pub fn delete_il_event(&self, id: &str) -> Result<usize,  rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM event_items WHERE id = ?1",
+            &[&id],
+        )
+    }
+
+    pub fn create_mqtt_queue_item(&self, topic: &str, payload: &str) -> Result<String, rusqlite::Error> {
+        let id = Uuid::new_v4().to_string();
+        self.conn.execute(
+            "INSERT INTO mqtt_queue (id, topic, payload) VALUES (?1, ?2, ?3)",
+            &[&id as &dyn ToSql, &topic, &payload],
+        )?;
+        Ok(id)
+    }
+
+    pub fn get_mqtt_queue_items(&self, limit: i32) -> Result<Vec<MqttQueueItem>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, topic, payload, inserted_at FROM mqtt_queue ORDER BY inserted_at ASC LIMIT ?1"
+        )?;
+        let items = stmt.query_map(&[&limit], |row| {
+            Ok(MqttQueueItem {
+                id: row.get(0).unwrap_or(None),
+                topic: row.get(1).unwrap_or("".to_string()),
+                payload: row.get(2).unwrap_or("".to_string()),
+                inserted_at: row.get(3).unwrap_or(None),
+            })
+        })?;
+
+        Ok(items.filter_map(|r| r.ok()).collect())
+    }
+
+    pub fn delete_mqtt_queue_item(&self, id: &str) -> Result<usize, rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM mqtt_queue WHERE id = ?1",
             &[&id],
         )
     }

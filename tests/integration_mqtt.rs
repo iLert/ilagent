@@ -15,7 +15,7 @@ use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::DaemonContext;
 use ilagent::consumers::mqtt::run_mqtt_job;
-use ilagent::poll::send_queued_event;
+use ilagent::poll::{run_poll_job, run_mqtt_poll_job};
 
 async fn start_mosquitto() -> (testcontainers::ContainerAsync<GenericImage>, u16) {
     let mosquitto_conf = b"listener 1883 0.0.0.0\nallow_anonymous true\n".to_vec();
@@ -225,9 +225,9 @@ async fn mqtt_invalid_json_dropped() {
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
 
-/// Full pipeline: MQTT publish -> consumer queues in DB -> poll delivers to mock ilert -> event removed
+/// Full event pipeline: MQTT publish -> consumer queues in DB -> poll delivers to mock ilert -> event removed
 #[tokio::test]
-async fn mqtt_full_e2e_publish_to_delivery() {
+async fn mqtt_event_e2e_with_poll() {
     let (_container, port) = start_mosquitto().await;
     let mock_server = MockServer::start().await;
 
@@ -243,16 +243,40 @@ async fn mqtt_full_e2e_publish_to_delivery() {
     let tmp = NamedTempFile::new().unwrap();
     let db_path = tmp.path().to_str().unwrap().to_string();
 
-    let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path);
-    let ctx_clone = daemon_ctx.clone();
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.db_file = db_path.clone();
 
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
     let _consumer = tokio::task::spawn_blocking(move || {
         run_mqtt_job(ctx_clone);
     });
 
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_poll_job(poll_ctx).await;
+    });
+
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // 1. Publish event via MQTT
+    // publish event via MQTT
     mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
         "apiKey": "mqtt-e2e-key",
         "eventType": "ALERT",
@@ -260,24 +284,257 @@ async fn mqtt_full_e2e_publish_to_delivery() {
         "alertKey": "pipe-1"
     }"#);
 
+    // wait for poll job to pick up and deliver
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // verify event was delivered and removed from queue
+    let db = ILDatabase::new(&db_path);
+    let remaining = db.get_il_events(10).unwrap();
+    assert!(remaining.is_empty(), "queue should be empty after poll delivery");
+
+    // wiremock expect(1) verifies the event was delivered exactly once
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
+/// MQTT policy with buffer: message lands in mqtt_queue, poll processes it, queue is drained
+#[tokio::test]
+async fn mqtt_policy_buffer_drain() {
+    let (_container, port) = start_mosquitto().await;
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path_regex("/api/escalation-policies/resolve.*"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 42, "name": "Test Policy"
+            })),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(path_regex("/api/users/resolve"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 99, "email": "support@ilert.com", "username": "support"
+            })),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    Mock::given(method("PUT"))
+        .and(path_regex("/api/escalation-policies/42/levels/1"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
+        )
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.policy_topic = Some("ilert/policies".to_string());
+    config.policy_routing_keys = Some("location".to_string());
+    config.filter_key = Some("eventType".to_string());
+    config.filter_val = Some("active".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // 2. Verify event is queued
+    // publish policy message
+    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+        "uuid": "550x8400-x29b-11d4-x716-446655440000",
+        "location": "powerplant",
+        "eventType": "active",
+        "data": { "email": "support@ilert.com", "shift": "1" }
+    }"#);
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // verify message is buffered in mqtt_queue
     let db = ILDatabase::new(&db_path);
-    let events = db.get_il_events(10).unwrap();
-    assert_eq!(events.len(), 1);
-    let event = events[0].clone();
+    let queued = db.get_mqtt_queue_items(10).unwrap();
+    assert_eq!(queued.len(), 1, "policy message should be in mqtt_queue");
+    assert_eq!(queued[0].topic, "ilert/policies");
 
-    // 3. Simulate poll: send to mock ilert
-    let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
-    let should_retry = send_queued_event(&ilert_client, &event).await;
-    assert!(!should_retry, "202 means delivered");
+    // now start the poll job to process it
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
 
-    // 4. Delete from queue (as poll would)
-    db.delete_il_event(event.id.as_ref().unwrap()).unwrap();
-    let remaining = db.get_il_events(10).unwrap();
-    assert!(remaining.is_empty(), "queue should be empty after delivery");
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    // verify queue is drained
+    let remaining = db.get_mqtt_queue_items(10).unwrap();
+    assert!(remaining.is_empty(), "mqtt_queue should be empty after successful processing");
+
+    // wiremock expect() verifies all API calls were made
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
+/// MQTT policy with buffer: failed API call keeps message in queue for retry
+#[tokio::test]
+async fn mqtt_policy_buffer_retry_on_failure() {
+    let (_container, port) = start_mosquitto().await;
+    let mock_server = MockServer::start().await;
+
+    // user resolve returns 500 — will cause retry
+    Mock::given(method("POST"))
+        .and(path_regex("/api/users/resolve"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.policy_topic = Some("ilert/policies".to_string());
+    config.policy_routing_keys = Some("location".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // publish policy message
+    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+        "location": "powerplant",
+        "eventType": "active",
+        "data": { "email": "support@ilert.com", "shift": "1" }
+    }"#);
+
+    // wait for poll to attempt processing
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    // verify message is still in queue (not deleted due to failure)
+    let db = ILDatabase::new(&db_path);
+    let queued = db.get_mqtt_queue_items(10).unwrap();
+    assert_eq!(queued.len(), 1, "failed message should remain in mqtt_queue for retry");
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
+/// MQTT policy with buffer: filtered message is queued but dropped by poll (no API calls)
+#[tokio::test]
+async fn mqtt_policy_buffer_filtered_dropped() {
+    let (_container, port) = start_mosquitto().await;
+    let mock_server = MockServer::start().await;
+
+    // no mocks — any unexpected call would fail
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.policy_topic = Some("ilert/policies".to_string());
+    config.policy_routing_keys = Some("location".to_string());
+    config.filter_key = Some("eventType".to_string());
+    config.filter_val = Some("active".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // publish with inactive eventType — should be filtered
+    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+        "uuid": "test-uuid",
+        "location": "powerplant",
+        "eventType": "inactive",
+        "data": { "email": "support@ilert.com", "shift": "1" }
+    }"#);
+
+    // wait for poll to process and drop the filtered message
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    // verify queue is drained (filtered = no retry, just deleted)
+    let db = ILDatabase::new(&db_path);
+    let remaining = db.get_mqtt_queue_items(10).unwrap();
+    assert!(remaining.is_empty(), "filtered message should be removed from queue");
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }

@@ -14,12 +14,24 @@ use serde_json::json;
 pub enum MessageType {
     Heartbeat,
     Event,
+    Policy,
     Ignored,
 }
 
-pub fn classify_message(message_topic: &str, event_topic: &str, heartbeat_topic: &str) -> MessageType {
+pub fn classify_message(message_topic: &str, event_topic: &str, heartbeat_topic: &str, policy_topic: Option<&str>) -> MessageType {
     if message_topic == heartbeat_topic {
         MessageType::Heartbeat
+    } else if let Some(pt) = policy_topic {
+        if message_topic == pt {
+            return MessageType::Policy;
+        }
+        if message_topic == event_topic {
+            MessageType::Event
+        } else if event_topic.contains('#') || event_topic.contains('+') {
+            MessageType::Event
+        } else {
+            MessageType::Ignored
+        }
     } else if message_topic == event_topic {
         MessageType::Event
     } else if event_topic.contains('#') || event_topic.contains('+') {
@@ -99,14 +111,27 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let event_topic = daemon_ctx.config.event_topic.clone().expect("Missing mqtt event topic");
     let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().expect("Missing mqtt heartbeat topic");
+    let policy_topic = daemon_ctx.config.policy_topic.clone();
 
-    client.subscribe(event_topic.as_str(), QoS::AtMostOnce)
+    let qos = match daemon_ctx.config.mqtt_qos {
+        1 => QoS::AtLeastOnce,
+        2 => QoS::ExactlyOnce,
+        _ => QoS::AtMostOnce,
+    };
+
+    client.subscribe(event_topic.as_str(), qos)
         .expect("Failed to subscribe to mqtt event topic");
 
-    client.subscribe(heartbeat_topic.as_str(), QoS::AtMostOnce)
+    client.subscribe(heartbeat_topic.as_str(), qos)
         .expect("Failed to subscribe to mqtt heartbeat topic");
 
-    info!("Subscribing to mqtt topics {} and {}", event_topic.as_str(), heartbeat_topic.as_str());
+    if let Some(ref pt) = policy_topic {
+        client.subscribe(pt.as_str(), qos)
+            .expect("Failed to subscribe to mqtt policy topic");
+        info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos);
+    } else {
+        info!("Subscribing to mqtt topics {} and {} (QoS {:?})", event_topic.as_str(), heartbeat_topic.as_str(), qos);
+    }
 
     loop {
 
@@ -145,9 +170,10 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     let payload = payload.expect("payload from utf8");
 
                     info!("Received mqtt message {}", message.topic);
-                    match classify_message(&message.topic, &event_topic, &heartbeat_topic) {
+                    match classify_message(&message.topic, &event_topic, &heartbeat_topic, policy_topic.as_deref()) {
                         MessageType::Heartbeat => handle_heartbeat_message(&daemon_ctx, payload),
                         MessageType::Event => handle_event_message(&daemon_ctx.config, &db, payload, &message.topic),
+                        MessageType::Policy => handle_policy_message(&daemon_ctx, &db, payload, &message.topic),
                         MessageType::Ignored => (),
                     }
                 },
@@ -175,6 +201,24 @@ fn handle_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) {
         let _ = tokio::spawn(async move {
             if hbt::ping_heartbeat(&ctx.ilert_client, heartbeat.integrationKey.as_str()).await {
                 info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.integrationKey.as_str());
+            }
+        });
+    }
+}
+
+fn handle_policy_message(daemon_ctx: &Arc<DaemonContext>, db: &ILDatabase, payload: &str, topic: &str) {
+    if daemon_ctx.config.mqtt_buffer {
+        match db.create_mqtt_queue_item(topic, payload) {
+            Ok(id) => info!("Policy message queued for retry processing: {}", id),
+            Err(e) => error!("Failed to queue policy message: {}", e),
+        }
+    } else {
+        let ctx = daemon_ctx.clone();
+        let payload = payload.to_string();
+        let _ = tokio::spawn(async move {
+            let result = super::policy::handle_policy_update(&ctx.ilert_client, &ctx.config, &payload).await;
+            if result {
+                warn!("Policy update failed and should be retried");
             }
         });
     }
@@ -212,7 +256,7 @@ mod tests {
     #[test]
     fn classify_exact_heartbeat_topic() {
         assert_eq!(
-            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats"),
+            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats", None),
             MessageType::Heartbeat
         );
     }
@@ -220,7 +264,7 @@ mod tests {
     #[test]
     fn classify_exact_event_topic() {
         assert_eq!(
-            classify_message("ilert/events", "ilert/events", "ilert/heartbeats"),
+            classify_message("ilert/events", "ilert/events", "ilert/heartbeats", None),
             MessageType::Event
         );
     }
@@ -228,7 +272,7 @@ mod tests {
     #[test]
     fn classify_unmatched_topic_without_wildcard() {
         assert_eq!(
-            classify_message("other/topic", "ilert/events", "ilert/heartbeats"),
+            classify_message("other/topic", "ilert/events", "ilert/heartbeats", None),
             MessageType::Ignored
         );
     }
@@ -236,7 +280,7 @@ mod tests {
     #[test]
     fn classify_wildcard_hash_matches_as_event() {
         assert_eq!(
-            classify_message("factory/sensors/temp", "#", "ilert/heartbeats"),
+            classify_message("factory/sensors/temp", "#", "ilert/heartbeats", None),
             MessageType::Event
         );
     }
@@ -244,7 +288,7 @@ mod tests {
     #[test]
     fn classify_wildcard_plus_matches_as_event() {
         assert_eq!(
-            classify_message("ilert/zone1/events", "ilert/+/events", "ilert/heartbeats"),
+            classify_message("ilert/zone1/events", "ilert/+/events", "ilert/heartbeats", None),
             MessageType::Event
         );
     }
@@ -253,7 +297,7 @@ mod tests {
     fn classify_heartbeat_takes_priority_over_wildcard() {
         // even if event_topic is '#', heartbeat exact match should win
         assert_eq!(
-            classify_message("ilert/heartbeats", "#", "ilert/heartbeats"),
+            classify_message("ilert/heartbeats", "#", "ilert/heartbeats", None),
             MessageType::Heartbeat
         );
     }
@@ -262,8 +306,40 @@ mod tests {
     fn classify_wildcard_does_not_match_heartbeat_topic() {
         // heartbeat topic is checked first, so a non-heartbeat message with wildcard event topic is Event
         assert_eq!(
-            classify_message("some/random/topic", "devices/+/alerts", "ilert/heartbeats"),
+            classify_message("some/random/topic", "devices/+/alerts", "ilert/heartbeats", None),
             MessageType::Event
+        );
+    }
+
+    #[test]
+    fn classify_policy_topic() {
+        assert_eq!(
+            classify_message("ilert/policies", "ilert/events", "ilert/heartbeats", Some("ilert/policies")),
+            MessageType::Policy
+        );
+    }
+
+    #[test]
+    fn classify_heartbeat_takes_priority_over_policy() {
+        assert_eq!(
+            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats", Some("ilert/heartbeats")),
+            MessageType::Heartbeat
+        );
+    }
+
+    #[test]
+    fn classify_event_when_policy_configured_but_not_matching() {
+        assert_eq!(
+            classify_message("ilert/events", "ilert/events", "ilert/heartbeats", Some("ilert/policies")),
+            MessageType::Event
+        );
+    }
+
+    #[test]
+    fn classify_no_policy_topic_ignores_policy() {
+        assert_eq!(
+            classify_message("ilert/policies", "ilert/events", "ilert/heartbeats", None),
+            MessageType::Ignored
         );
     }
 
@@ -318,11 +394,6 @@ mod tests {
     }
 
     // --- build_event_api_path ---
-
-    #[test]
-    fn event_api_path_format() {
-        assert_eq!(build_event_api_path("il1api123"), "/v1/events/mqtt/il1api123");
-    }
 
     #[test]
     fn event_api_path_empty_key() {

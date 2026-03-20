@@ -1,4 +1,3 @@
 #!/bin/bash
-cargo run -- cleanup -v -v \
-  -k 'eyJhbGciOiJIUzIjx' \
+ILERT_API_KEY='eyJhbGciOiJIUzIjx' cargo run -- cleanup -v -v \
   --resource alerts

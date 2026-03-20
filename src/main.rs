@@ -62,6 +62,26 @@ pub fn consumer_args() -> Vec<Arg> {
             .long("filter_val")
             .value_name("FILTER_VAL")
             .help("Along with 'filter_key', requires certain value of JSON payload property"),
+        Arg::new("policy_topic")
+            .long("policy_topic")
+            .value_name("POLICY_TOPIC")
+            .help("Consumer topic to listen to for escalation policy updates"),
+        Arg::new("policy_routing_keys")
+            .long("policy_routing_keys")
+            .value_name("POLICY_ROUTING_KEYS")
+            .help("Comma-separated JSON field names to extract routing key values from"),
+        Arg::new("map_key_email")
+            .long("map_key_email")
+            .value_name("MAP_KEY_EMAIL")
+            .help("JSON path for email field, dot-notation for nested fields (default: 'data.email')"),
+        Arg::new("map_key_shift")
+            .long("map_key_shift")
+            .value_name("MAP_KEY_SHIFT")
+            .help("JSON path for shift field, dot-notation for nested fields (default: 'data.shift')"),
+        Arg::new("shift_offset")
+            .long("shift_offset")
+            .value_name("SHIFT_OFFSET")
+            .help("Offset to apply to the shift value (e.g. -1 to convert 1-indexed to 0-indexed, default: 0)"),
     ]
 }
 
@@ -118,6 +138,14 @@ pub fn build_cli() -> Command {
             .long("mqtt_client_key")
             .value_name("MQTT_CLIENT_KEY")
             .help("Client private key file path for MQTT mTLS (PEM format)"))
+        .arg(Arg::new("mqtt_qos")
+            .long("mqtt_qos")
+            .value_name("MQTT_QOS")
+            .help("Sets the MQTT QoS level: 0 (at most once), 1 (at least once), 2 (exactly once) (default: 0)"))
+        .arg(Arg::new("mqtt_buffer")
+            .long("mqtt_buffer")
+            .action(ArgAction::SetTrue)
+            .help("Buffer MQTT messages in SQLite for retry instead of processing directly"))
         // kafka
         .arg(Arg::new("kafka_brokers")
             .long("kafka_brokers")
@@ -137,8 +165,7 @@ pub fn build_cli() -> Command {
             .short('k')
             .long("integration_key")
             .value_name("INTEGRATION_KEY")
-            .required(true)
-            .help("Sets the integration key"))
+            .help("Sets the integration key (falls back to ILERT_INTEGRATION_KEY env var)"))
         .arg(Arg::new("event_type")
             .short('t')
             .long("event_type")
@@ -185,17 +212,10 @@ pub fn build_cli() -> Command {
             .short('k')
             .long("integration_key")
             .value_name("INTEGRATION_KEY")
-            .required(true)
-            .help("Sets the integration key"));
+            .help("Sets the integration key (falls back to ILERT_INTEGRATION_KEY env var)"));
 
     let cleanup_cmd = Command::new("cleanup")
-        .about("Clean up ilert resources")
-        .arg(Arg::new("api_key")
-            .short('k')
-            .long("api_key")
-            .value_name("APIKEY")
-            .required(true)
-            .help("Sets the API key"))
+        .about("Clean up ilert resources (requires ILERT_API_KEY env var)")
         .arg(Arg::new("resource")
             .long("resource")
             .value_name("RESOURCE")
@@ -288,6 +308,20 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
         config.mqtt_client_cert_path = matches.get_one::<String>("mqtt_client_cert").map(|s| s.to_string());
         config.mqtt_client_key_path = matches.get_one::<String>("mqtt_client_key").map(|s| s.to_string());
 
+        if let Some(mqtt_qos) = matches.get_one::<String>("mqtt_qos") {
+            let qos = mqtt_qos.parse::<u8>().expect("Failed to parse mqtt_qos as integer");
+            if qos > 2 {
+                panic!("mqtt_qos must be 0, 1, or 2");
+            }
+            config.mqtt_qos = qos;
+            info!("MQTT QoS level set to {}", qos);
+        }
+
+        config.mqtt_buffer = matches.get_flag("mqtt_buffer");
+        if config.mqtt_buffer {
+            info!("MQTT buffering enabled — messages will be queued in SQLite for retry");
+        }
+
         config = parse_consumer_arguments(matches, config);
     }
 
@@ -378,6 +412,36 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
         info!("Overwrite for payload val of key 'eventType' and default: 'RESOLVE' has been configured: '{:?}'", config.map_val_etype_resolve);
     }
 
+    if let Ok(api_key) = std::env::var("ILERT_API_KEY") {
+        config.api_key = Some(api_key);
+        info!("API key has been configured from ILERT_API_KEY environment variable");
+    }
+
+    if let Some(policy_topic) = matches.get_one::<String>("policy_topic") {
+        config.policy_topic = Some(policy_topic.to_string());
+        info!("Policy topic has been configured: '{}'", policy_topic);
+    }
+
+    if let Some(policy_routing_keys) = matches.get_one::<String>("policy_routing_keys") {
+        config.policy_routing_keys = Some(policy_routing_keys.to_string());
+        info!("Policy routing keys have been configured: '{}'", policy_routing_keys);
+    }
+
+    if let Some(map_key_email) = matches.get_one::<String>("map_key_email") {
+        config.map_key_email = Some(map_key_email.to_string());
+        info!("Email field path has been configured: '{}'", map_key_email);
+    }
+
+    if let Some(map_key_shift) = matches.get_one::<String>("map_key_shift") {
+        config.map_key_shift = Some(map_key_shift.to_string());
+        info!("Shift field path has been configured: '{}'", map_key_shift);
+    }
+
+    if let Some(shift_offset) = matches.get_one::<String>("shift_offset") {
+        config.shift_offset = shift_offset.parse::<i64>().expect("Failed to parse shift_offset as integer");
+        info!("Shift offset has been configured: {}", config.shift_offset);
+    }
+
     config
 }
 
@@ -398,7 +462,10 @@ async fn run_daemon(config: &ILConfig) {
         process::exit(1);
     }));
 
-    let ilert_client = ILert::new().expect("Failed to create ilert client");
+    let mut ilert_client = ILert::new().expect("Failed to create ilert client");
+    if let Some(ref api_key) = config.api_key {
+        ilert_client.auth_via_token(api_key).expect("Failed to set API key");
+    }
     let db = ILDatabase::new(config.db_file.as_str());
     info!("Migrating DB..");
     db.prepare_database();
@@ -440,6 +507,7 @@ async fn run_daemon(config: &ILConfig) {
     }
 
     let mut mqtt_job = None;
+    let mut mqtt_poll_job = None;
     if config.mqtt_host.is_some() {
         info!("Running MQTT thread..");
         let cloned_ctx = daemon_ctx.clone();
@@ -447,6 +515,14 @@ async fn run_daemon(config: &ILConfig) {
         mqtt_job = Some(tokio::task::spawn_blocking(move || {
             consumers::mqtt::run_mqtt_job(cloned_ctx);
         }));
+
+        if config.mqtt_buffer {
+            info!("Starting MQTT poll job..");
+            let cloned_ctx = daemon_ctx.clone();
+            mqtt_poll_job = Some(tokio::spawn(async move {
+                poll::run_mqtt_poll_job(cloned_ctx).await;
+            }));
+        }
     }
 
     if config.kafka_brokers.is_some() {
@@ -472,6 +548,11 @@ async fn run_daemon(config: &ILConfig) {
     if let Some(handle) = hbt_job {
         handle.await.expect("Failed to join heartbeat thread");
         debug!("hbt ended");
+    }
+
+    if let Some(handle) = mqtt_poll_job {
+        handle.await.expect("Failed to join mqtt poll thread");
+        debug!("mqtt poll ended");
     }
 
     if let Some(handle) = mqtt_job {
@@ -507,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn cli_event_requires_all_fields() {
+    fn cli_event_requires_event_type_and_summary() {
         let result = build_cli().try_get_matches_from(vec!["ilagent", "event", "-k", "key1"]);
         assert!(result.is_err()); // missing event_type and summary
     }
@@ -542,9 +623,10 @@ mod tests {
     }
 
     #[test]
-    fn cli_heartbeat_requires_integration_key() {
+    fn cli_heartbeat_accepts_no_args() {
+        // integration_key can come from env, so CLI parses fine without it
         let result = build_cli().try_get_matches_from(vec!["ilagent", "heartbeat"]);
-        assert!(result.is_err());
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -554,9 +636,17 @@ mod tests {
     }
 
     #[test]
-    fn cli_cleanup_requires_both_args() {
-        let result = build_cli().try_get_matches_from(vec!["ilagent", "cleanup", "-k", "key1"]);
+    fn cli_cleanup_requires_resource() {
+        let result = build_cli().try_get_matches_from(vec!["ilagent", "cleanup"]);
         assert!(result.is_err()); // missing --resource
+    }
+
+    #[test]
+    fn cli_cleanup_valid() {
+        let m = build_cli().try_get_matches_from(vec![
+            "ilagent", "cleanup", "--resource", "alerts"
+        ]);
+        assert!(m.is_ok());
     }
 
     #[test]
@@ -753,6 +843,46 @@ mod tests {
         assert_eq!(config.mqtt_host.unwrap(), "mqtt.example.com");
     }
 
+    // --- build_daemon_config: policy ---
+
+    #[test]
+    fn daemon_config_policy_args() {
+        // env var tests must be in a single test to avoid races with parallel execution
+        unsafe { std::env::set_var("ILERT_API_KEY", "il1api-test-token"); }
+
+        // mqtt with policy
+        let m = build_cli().try_get_matches_from(vec![
+            "ilagent", "daemon",
+            "-m", "broker.local",
+            "--policy_topic", "ilert/policies",
+            "--policy_routing_keys", "location,slot",
+            "--filter_key", "eventType",
+            "--filter_val", "active",
+        ]).unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert_eq!(config.api_key.as_deref().unwrap(), "il1api-test-token");
+        assert_eq!(config.policy_topic.unwrap(), "ilert/policies");
+        assert_eq!(config.policy_routing_keys.unwrap(), "location,slot");
+        assert_eq!(config.filter_key.unwrap(), "eventType");
+        assert_eq!(config.filter_val.unwrap(), "active");
+
+        // kafka with policy
+        let m = build_cli().try_get_matches_from(vec![
+            "ilagent", "daemon",
+            "--kafka_brokers", "localhost:9092",
+            "--policy_topic", "policy-updates",
+            "--policy_routing_keys", "location",
+        ]).unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert_eq!(config.api_key.as_deref().unwrap(), "il1api-test-token");
+        assert_eq!(config.policy_topic.unwrap(), "policy-updates");
+        assert_eq!(config.policy_routing_keys.unwrap(), "location");
+
+        unsafe { std::env::remove_var("ILERT_API_KEY"); }
+    }
+
     // --- consumer mappings only apply when mqtt or kafka is present ---
 
     #[test]
@@ -770,12 +900,19 @@ mod tests {
     }
 }
 
+fn resolve_integration_key(matches: &ArgMatches) -> String {
+    matches.get_one::<String>("integration_key")
+        .cloned()
+        .or_else(|| std::env::var("ILERT_INTEGRATION_KEY").ok())
+        .expect("Integration key is required: provide --integration_key or set ILERT_INTEGRATION_KEY env var")
+}
+
 /**
     Attempts to create an event, one time - skips queue
 */
 async fn run_event(matches: &ArgMatches) {
     let ilert_client = ILert::new().expect("Failed to create ilert client");
-    let integration_key = matches.get_one::<String>("integration_key").unwrap();
+    let integration_key = resolve_integration_key(matches);
     let event_type = matches.get_one::<String>("event_type").unwrap();
     let summary = matches.get_one::<String>("summary").unwrap();
 
@@ -812,7 +949,7 @@ async fn run_event(matches: &ArgMatches) {
     }
 
     let mut event = EventQueueItem::new_with_required(
-        integration_key, event_type, summary, alert_key);
+        &integration_key, event_type, summary, alert_key);
 
     event.id = Some("provided".to_string()); // prettier logs
     event.priority = priority;
@@ -828,9 +965,9 @@ async fn run_event(matches: &ArgMatches) {
 */
 async fn run_heartbeat(matches: &ArgMatches) {
     let ilert_client = ILert::new().expect("Failed to create ilert client");
-    let integration_key = matches.get_one::<String>("integration_key").unwrap();
+    let integration_key = resolve_integration_key(matches);
 
-    if hbt::ping_heartbeat(&ilert_client, integration_key).await {
+    if hbt::ping_heartbeat(&ilert_client, &integration_key).await {
         info!("Heartbeat ping successful");
     }
 }
@@ -839,9 +976,9 @@ async fn run_heartbeat(matches: &ArgMatches) {
     Attempts to clean-up resources
 */
 async fn run_cleanup(matches: &ArgMatches) {
-    let api_key = matches.get_one::<String>("api_key").unwrap();
+    let api_key = std::env::var("ILERT_API_KEY").expect("ILERT_API_KEY environment variable is required for cleanup");
     let mut ilert_client = ILert::new().expect("Failed to create ilert client");
-    ilert_client.auth_via_token(api_key).expect("Failed to set api key");
+    ilert_client.auth_via_token(&api_key).expect("Failed to set api key");
 
     let resource = matches.get_one::<String>("resource").unwrap();
     match resource.as_str() {

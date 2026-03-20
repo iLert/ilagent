@@ -1,0 +1,7 @@
+#!/bin/bash
+ILERT_API_KEY='il1api...' cargo run -- daemon -v -v \
+    -m localhost -q 1883 -n ilagent \
+    --policy_topic 'ilert/policies' \
+    --policy_routing_keys 'location,slot' \
+    --filter_key 'eventType' \
+    --filter_val 'active'

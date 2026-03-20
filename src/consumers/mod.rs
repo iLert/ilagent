@@ -1,5 +1,6 @@
 pub mod kafka;
 pub mod mqtt;
+pub mod policy;
 
 use crate::config::ILConfig;
 use crate::models::event::EventQueueItemJson;
