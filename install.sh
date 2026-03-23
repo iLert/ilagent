@@ -14,7 +14,7 @@ run_with_sudo_prompt() {
   echo ""
   echo "Insufficient permissions. The following command needs to be run with sudo:"
   echo "  sudo $cmd"
-  read -r -p "Run with sudo? [y/N] " answer
+  read -r -p "Run with sudo? [y/N] " answer </dev/tty
   case "$answer" in
     [yY]|[yY][eE][sS])
       eval "sudo $cmd"
