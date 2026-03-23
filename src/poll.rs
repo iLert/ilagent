@@ -230,6 +230,11 @@ async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueue
                     &daemon_ctx.ilert_client, &daemon_ctx.config, &item.payload
                 ).await
             },
+            MessageType::Event => {
+                let db = daemon_ctx.db.lock().await;
+                crate::consumers::mqtt::enqueue_event(&daemon_ctx.config, &db, &item.payload, &item.topic);
+                false
+            },
             other => {
                 warn!("Unexpected message type {:?} in mqtt queue for topic '{}', dropping", other, item.topic);
                 false

@@ -237,6 +237,17 @@ fn handle_policy_message(daemon_ctx: &Arc<DaemonContext>, db: &ILDatabase, paylo
 }
 
 fn handle_event_message(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) -> () {
+    if config.mqtt_buffer {
+        match db.create_mqtt_queue_item(topic, payload) {
+            Ok(id) => info!("Event message queued for retry processing: {}", id),
+            Err(e) => error!("Failed to queue event message: {}", e),
+        }
+    } else {
+        enqueue_event(config, db, payload, topic);
+    }
+}
+
+pub fn enqueue_event(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) {
     if let Some(event) = prepare_mqtt_event(config, payload, topic) {
         let event_api_path = build_event_api_path(&event.integrationKey);
         let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
