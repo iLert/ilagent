@@ -2,6 +2,7 @@ use ilert::ilert_builders::{EventImage, EventLink, ILertEventType};
 use log::{debug, error, warn};
 use serde_derive::{Deserialize, Serialize};
 use crate::config::ILConfig;
+use crate::json_util::get_nested_value;
 use crate::models::event_db::EventQueueItem;
 
 #[allow(non_snake_case)]
@@ -174,11 +175,18 @@ impl EventQueueItemJson {
             }
 
             if let Some(ref filter_val) = config.filter_val {
-                let val = val_opt.expect("failed to unwrap event filter val opt");
-                if let Some(val) = val.as_str() {
-                    if !filter_val.eq(val) {
-                        debug!("Dropping event because filter key value is not matching: {:?}", val);
-                        return None;
+                if let Some(val) = val_opt {
+                    match val.as_str() {
+                        Some(val_str) => {
+                            if !filter_val.eq(val_str) {
+                                debug!("Dropping event because filter key value is not matching: {:?}", val_str);
+                                return None;
+                            }
+                        },
+                        None => {
+                            warn!("Dropping event because filter key value is not a string: {:?}", val);
+                            return None;
+                        }
                     }
                 }
             }
@@ -193,30 +201,32 @@ impl EventQueueItemJson {
         // mappings
 
         if let Some(ref map_key_alert_key) = config.map_key_alert_key {
-            let val_opt = json.get(map_key_alert_key);
-            if let Some(val) = val_opt {
-                if let Some(val) = val.as_str() {
-                    parsed.alertKey = Some(val.to_string());
+            if let Some(val) = get_nested_value(&json, map_key_alert_key) {
+                match val.as_str() {
+                    Some(s) => parsed.alertKey = Some(s.to_string()),
+                    None => warn!("map_key_alert_key '{}' matched a non-string value: {:?}", map_key_alert_key, val),
                 }
             }
         }
 
         if let Some(ref map_key_summary) = config.map_key_summary {
-            let val_opt = json.get(map_key_summary);
-            if let Some(val) = val_opt {
-                if let Some(val) = val.as_str() {
-                    parsed.summary = Some(val.to_string());
+            if let Some(val) = get_nested_value(&json, map_key_summary) {
+                match val.as_str() {
+                    Some(s) => parsed.summary = Some(s.to_string()),
+                    None => warn!("map_key_summary '{}' matched a non-string value: {:?}", map_key_summary, val),
                 }
             }
         }
 
         let mut event_type = "".to_string();
         if let Some(ref map_key_etype) = config.map_key_etype {
-            let val_opt = json.get(map_key_etype);
-            if let Some(val) = val_opt {
-                if let Some(val) = val.as_str() {
-                    event_type = val.to_string();
-                    parsed.eventType = Some(event_type.clone());
+            if let Some(val) = get_nested_value(&json, map_key_etype) {
+                match val.as_str() {
+                    Some(s) => {
+                        event_type = s.to_string();
+                        parsed.eventType = Some(event_type.clone());
+                    },
+                    None => warn!("map_key_etype '{}' matched a non-string value: {:?}", map_key_etype, val),
                 }
             }
         }

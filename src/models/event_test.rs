@@ -183,6 +183,53 @@ mod tests {
         assert_eq!(event.summary, "Pump failure");
     }
 
+    // --- parse_event_json: dot-notation mapping ---
+
+    #[test]
+    fn parse_event_maps_nested_summary_key() {
+        let mut config = default_config();
+        config.event_key = Some("k1".to_string());
+        config.map_key_summary = Some("data.message".to_string());
+        let payload = r#"{"data": {"message": "Nested summary"}}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "t1");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().summary, "Nested summary");
+    }
+
+    #[test]
+    fn parse_event_maps_nested_alert_key() {
+        let mut config = default_config();
+        config.event_key = Some("k1".to_string());
+        config.map_key_alert_key = Some("meta.code".to_string());
+        let payload = r#"{"meta": {"code": "M-200"}}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "t1");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().alertKey.unwrap(), "M-200");
+    }
+
+    #[test]
+    fn parse_event_maps_nested_event_type_key() {
+        let mut config = default_config();
+        config.event_key = Some("k1".to_string());
+        config.map_key_etype = Some("status.type".to_string());
+        let payload = r#"{"status": {"type": "RESOLVE"}}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "t1");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().eventType, "RESOLVE");
+    }
+
+    #[test]
+    fn parse_event_nested_mapping_missing_path_graceful() {
+        let mut config = default_config();
+        config.event_key = Some("k1".to_string());
+        config.map_key_summary = Some("data.nonexistent.deep".to_string());
+        let payload = r#"{"data": {"other": "value"}}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "t1");
+        assert!(result.is_some());
+        // summary falls back to topic-based default
+        assert_eq!(result.unwrap().summary, "New alert from t1");
+    }
+
     // --- parse_event_json: filters ---
 
     #[test]
@@ -221,6 +268,28 @@ mod tests {
         let payload = r#"{"apiKey": "k1", "type": "INFO", "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_none());
+    }
+
+    // --- parse_event_json: filter with non-string values ---
+
+    #[test]
+    fn parse_event_filter_non_string_value_drops() {
+        let mut config = default_config();
+        config.filter_key = Some("type".to_string());
+        config.filter_val = Some("ALARM".to_string());
+        let payload = r#"{"apiKey": "k1", "type": 123, "eventType": "ALERT", "summary": "test"}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
+        assert!(result.is_none(), "non-string filter value should be rejected");
+    }
+
+    #[test]
+    fn parse_event_filter_key_only_non_string_passes() {
+        let mut config = default_config();
+        config.filter_key = Some("type".to_string());
+        // no filter_val set, just checking key existence
+        let payload = r#"{"apiKey": "k1", "type": 123, "eventType": "ALERT", "summary": "test"}"#;
+        let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
+        assert!(result.is_some(), "key-only filter should pass when key exists regardless of type");
     }
 
     // --- parse_event_json: default summary fallback ---

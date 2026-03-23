@@ -13,6 +13,9 @@ pub struct ILConfig {
     pub mqtt_username: Option<String>,
     pub mqtt_password: Option<String>,
     pub mqtt_tls: bool,
+    pub mqtt_qos: u8,
+    pub mqtt_buffer: bool,
+    pub mqtt_shared_group: Option<String>,
     pub mqtt_ca_path: Option<String>,
     pub mqtt_client_cert_path: Option<String>,
     pub mqtt_client_key_path: Option<String>,
@@ -33,7 +36,15 @@ pub struct ILConfig {
     pub map_val_etype_resolve: Option<String>,
 
     pub filter_key: Option<String>,
-    pub filter_val: Option<String>
+    pub filter_val: Option<String>,
+    pub forward_message_payload: bool,
+
+    pub api_key: Option<String>,
+    pub policy_topic: Option<String>,
+    pub policy_routing_keys: Option<String>,
+    pub map_key_email: Option<String>,
+    pub map_key_shift: Option<String>,
+    pub shift_offset: i64,
 }
 
 impl ILConfig {
@@ -52,6 +63,9 @@ impl ILConfig {
             mqtt_username: None,
             mqtt_password: None,
             mqtt_tls: false,
+            mqtt_qos: 0,
+            mqtt_buffer: false,
+            mqtt_shared_group: None,
             mqtt_ca_path: None,
             mqtt_client_cert_path: None,
             mqtt_client_key_path: None,
@@ -67,7 +81,14 @@ impl ILConfig {
             map_val_etype_accept: None,
             map_val_etype_resolve: None,
             filter_key: None,
-            filter_val: None
+            filter_val: None,
+            forward_message_payload: false,
+            api_key: None,
+            policy_topic: None,
+            policy_routing_keys: None,
+            map_key_email: None,
+            map_key_shift: None,
+            shift_offset: 0,
         }
     }
 

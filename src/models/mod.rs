@@ -1,6 +1,7 @@
 pub mod heartbeat;
 pub mod event;
 pub mod event_db;
+pub mod mqtt_queue;
 
 #[cfg(test)]
 mod event_test;

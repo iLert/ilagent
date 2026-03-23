@@ -50,12 +50,17 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
         "".to_string()
     };
 
+    let policy_topic = daemon_ctx.config.clone().policy_topic.unwrap_or_default();
+
     let mut topics = Vec::new();
     if !event_topic.is_empty() {
         topics.push(event_topic.as_str());
     }
     if !heartbeat_topic.is_empty() {
         topics.push(heartbeat_topic.as_str());
+    }
+    if !policy_topic.is_empty() {
+        topics.push(policy_topic.as_str());
     }
 
     let brokers = daemon_ctx.config.clone().kafka_brokers.expect("no broker");
@@ -115,6 +120,8 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     handle_event_message(daemon_ctx.clone(), message_key, payload, m.topic()).await
                 } else if m.topic().eq(heartbeat_topic.as_str()) {
                     handle_heartbeat_message(daemon_ctx.clone(), message_key, payload).await
+                } else if !policy_topic.is_empty() && m.topic().eq(policy_topic.as_str()) {
+                    handle_policy_message(daemon_ctx.clone(), payload).await
                 } else {
                     warn!("Received Kafka message from unsubscribed topic: {}", m.topic());
                     // will commit these anyway
@@ -132,6 +139,10 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
             }
         };
     }
+}
+
+async fn handle_policy_message(daemon_context: Arc<DaemonContext>, payload: &str) -> bool {
+    super::policy::handle_policy_update(&daemon_context.ilert_client, &daemon_context.config, payload).await
 }
 
 async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str, payload: &str) -> bool {

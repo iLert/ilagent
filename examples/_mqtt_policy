@@ -1,0 +1,12 @@
+#!/bin/bash
+ILERT_API_KEY='il1api...' cargo run -- daemon -v -v \
+    -m localhost -q 1883 -n ilagent \
+    --policy_topic 'user/logins' \
+    --policy_routing_keys 'location,slot' \
+    --map_key_email 'data.email' \
+    --map_key_shift 'data.shift' \
+    --shift_offset -1 \
+    --filter_key 'eventType' \
+    --filter_val 'active' \
+    --mqtt_qos 1 \
+    --mqtt_buffer
