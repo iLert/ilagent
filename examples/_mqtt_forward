@@ -31,7 +31,7 @@
 #   alertKey:      f9e8d7c6-b5a4-3210-fedc-ba9876543210 (from 'data.alertId')
 #   customDetails: the full original payload with topic merged in
 
-cargo run -- daemon -v -v \
+ilagent daemon -v -v \
     -m localhost -q 1883 -n ilagent -e 'factory/alerts' \
     --event_key 'il1api123...' \
     --map_key_etype 'eventType' \
