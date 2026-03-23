@@ -21,3 +21,4 @@ Cargo.lock
 .vscode/
 *.db3
 .DS_Store
+x_builds/

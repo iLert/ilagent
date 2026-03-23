@@ -6,7 +6,7 @@ else
   set -o xtrace
 fi
 
-VERSION="0.3.0"
+VERSION="0.7.0"
 
 if [ "$(uname)" == "Darwin" ]; then
 

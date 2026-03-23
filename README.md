@@ -17,6 +17,8 @@ The ilert Agent 🦀 📦 is a lightweight program that lets you easily integrat
 * Map and filter consumer messages to ilert events
 * Sync escalation policy levels from external systems
 
+> Check detailed guides here => [ilagent docs](https://docs.ilert.com/developer-docs/rest-api/client-libraries/ilagent)
+
 ## Quick start
 
 ### Docker
@@ -50,14 +52,7 @@ See the [`examples/`](examples/) directory for ready-to-run sample commands.
 
 ## Cross-compiling
 
-Requires [cross](https://github.com/cross-rs/cross) (`cargo install cross`, for Apple Silicon: `cargo install cross --git https://github.com/cross-rs/cross`).
-
-```sh
-cargo build --release                                          # Mac / host
-cross build --release --target x86_64-unknown-linux-gnu        # Linux
-cross build --release --target x86_64-pc-windows-gnu           # Windows
-cross build --release --target arm-unknown-linux-gnueabihf     # ARM
-```
+See [XCOMPILE.md](XCOMPILE.md).
 
 ## Getting help
 
