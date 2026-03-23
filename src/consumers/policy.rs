@@ -3,17 +3,10 @@ use serde_json::Value;
 use ilert::ilert::ILert;
 
 use crate::config::ILConfig;
+use crate::json_util::get_nested_value;
 
 const DEFAULT_EMAIL_PATH: &str = "data.email";
 const DEFAULT_SHIFT_PATH: &str = "data.shift";
-
-pub fn get_nested_value<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
-    let mut current = json;
-    for key in path.split('.') {
-        current = current.get(key)?;
-    }
-    Some(current)
-}
 
 pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
     let json: Value = match serde_json::from_str(payload) {
@@ -32,10 +25,18 @@ pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
             return None;
         }
         if let Some(ref filter_val) = config.filter_val {
-            if let Some(val) = val_opt.unwrap().as_str() {
-                if !filter_val.eq(val) {
-                    debug!("Dropping policy message because filter key value '{}' != '{}'", val, filter_val);
-                    return None;
+            if let Some(val) = val_opt {
+                match val.as_str() {
+                    Some(val_str) => {
+                        if !filter_val.eq(val_str) {
+                            debug!("Dropping policy message because filter key value '{}' != '{}'", val_str, filter_val);
+                            return None;
+                        }
+                    },
+                    None => {
+                        warn!("Dropping policy message because filter key value is not a string: {:?}", val);
+                        return None;
+                    }
                 }
             }
         }
@@ -459,6 +460,15 @@ mod tests {
         let mut config = ILConfig::new();
         config.filter_key = Some("nonexistent".to_string());
         assert!(parse_policy_payload(&config, SAMPLE_PAYLOAD).is_none());
+    }
+
+    #[test]
+    fn filter_non_string_value_rejects() {
+        let mut config = ILConfig::new();
+        config.filter_key = Some("eventType".to_string());
+        config.filter_val = Some("active".to_string());
+        let payload = r#"{"eventType": 123, "data": {"email": "test@ilert.com"}}"#;
+        assert!(parse_policy_payload(&config, payload).is_none(), "non-string filter value should be rejected");
     }
 
     // --- error cases ---

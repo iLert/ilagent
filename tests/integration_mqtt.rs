@@ -539,6 +539,97 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
 
+/// MQTT event with dot-notation mapping and forward_message_payload: full original payload as customDetails
+#[tokio::test]
+async fn mqtt_event_forward_payload_with_nested_mapping() {
+    let (_container, port) = start_mosquitto().await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.db_file = db_path.clone();
+    config.event_key = Some("il1api-test-key".to_string());
+    config.map_key_etype = Some("eventType".to_string());
+    config.map_val_etype_alert = Some("alertCreated".to_string());
+    config.map_key_summary = Some("data.message".to_string());
+    config.map_key_alert_key = Some("data.alertId".to_string());
+    config.forward_message_payload = true;
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+    });
+    let ctx_clone = daemon_ctx.clone();
+
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+        "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "location": "powerplant",
+        "field": "assembly",
+        "slot": "nrd023",
+        "component": "asm_unit02",
+        "eventTime": "2024-03-15T09:17:45.382Z",
+        "eventType": "alertCreated",
+        "source": "monitoringService",
+        "data": {
+            "active": true,
+            "alertId": "f9e8d7c6-b5a4-3210-fedc-ba9876543210",
+            "priority": 2,
+            "type": "pressureAlert",
+            "label": "Pressure Threshold Exceeded",
+            "message": "Anomaly detected on pump unit 2",
+            "description": "",
+            "alarmGroup": []
+        }
+    }"#);
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let db = ILDatabase::new(&db_path);
+    let events = db.get_il_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+
+    // verify mapped fields via dot-notation
+    assert_eq!(events[0].integration_key, "il1api-test-key");
+    assert_eq!(events[0].event_type, "ALERT"); // "alertCreated" mapped to ALERT
+    assert_eq!(events[0].summary, "Anomaly detected on pump unit 2");
+    assert_eq!(events[0].alert_key.as_ref().unwrap(), "f9e8d7c6-b5a4-3210-fedc-ba9876543210");
+
+    // verify customDetails contains the full original payload
+    let cd: serde_json::Value =
+        serde_json::from_str(events[0].custom_details.as_ref().unwrap()).unwrap();
+    assert_eq!(cd["uuid"], "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    assert_eq!(cd["location"], "powerplant");
+    assert_eq!(cd["component"], "asm_unit02");
+    assert_eq!(cd["source"], "monitoringService");
+    assert_eq!(cd["data"]["active"], true);
+    assert_eq!(cd["data"]["priority"], 2);
+    assert_eq!(cd["data"]["type"], "pressureAlert");
+    assert_eq!(cd["data"]["label"], "Pressure Threshold Exceeded");
+    assert_eq!(cd["data"]["alarmGroup"], serde_json::json!([]));
+
+    // verify MQTT metadata was merged in
+    assert_eq!(cd["topic"], "ilert/events");
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
 /// MQTT event with config mappings (custom field names mapped to ilert fields)
 #[tokio::test]
 async fn mqtt_event_with_config_mappings() {

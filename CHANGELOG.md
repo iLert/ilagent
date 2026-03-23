@@ -1,5 +1,18 @@
 # ilagent CHANGELOG
 
+## 2026-03-21, Version 0.6.2
+
+* **BREAKING** `--map_key_summary`, `--map_key_alert_key`, and `--map_key_etype` now interpret dots as nested path separators (e.g. `data.message` accesses `{"data": {"message": "..."}}`) — JSON keys containing literal dots can no longer be matched with these flags
+* added dot-notation support for `--map_key_summary`, `--map_key_alert_key`, and `--map_key_etype` (e.g. `data.message`, `status.type`)
+* added `--forward_message_payload` flag to include the full original JSON payload as `customDetails` in events (MQTT and Kafka)
+* added `--shift_offset` flag to adjust shift values (e.g. `-1` to convert 1-indexed to 0-indexed)
+* added `--mqtt_qos` flag to configure MQTT QoS level (0, 1, or 2)
+* added `--mqtt_buffer` flag to buffer MQTT messages in SQLite for retry with adaptive polling and exponential backoff
+* added `--mqtt_shared_group` flag for MQTT v5 shared subscriptions (load balancing across multiple agent instances)
+* adaptive polling for both event and MQTT queue pollers (fast drain when active, exponential backoff on failures up to 60s)
+* extracted `get_nested_value` into shared `json_util` module for reuse across event and policy mapping
+* added high availability documentation covering Kafka, HTTP, and MQTT deployment strategies
+
 ## 2026-03-20, Version 0.6.1
 
 * **BREAKING** `cleanup` command no longer accepts `--api_key` argument, API key must be provided via `ILERT_API_KEY` environment variable

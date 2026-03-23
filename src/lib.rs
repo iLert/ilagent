@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 pub mod config;
 pub mod db;
+pub mod json_util;
 pub mod models;
 pub mod hbt;
 pub mod consumers;

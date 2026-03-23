@@ -119,18 +119,30 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         _ => QoS::AtMostOnce,
     };
 
-    client.subscribe(event_topic.as_str(), qos)
+    let shared_prefix = daemon_ctx.config.mqtt_shared_group.as_ref()
+        .map(|g| format!("$share/{}/", g));
+
+    let sub_topic = |topic: &str| -> String {
+        match &shared_prefix {
+            Some(prefix) => format!("{}{}", prefix, topic),
+            None => topic.to_string(),
+        }
+    };
+
+    client.subscribe(sub_topic(&event_topic).as_str(), qos)
         .expect("Failed to subscribe to mqtt event topic");
 
-    client.subscribe(heartbeat_topic.as_str(), qos)
+    client.subscribe(sub_topic(&heartbeat_topic).as_str(), qos)
         .expect("Failed to subscribe to mqtt heartbeat topic");
 
     if let Some(ref pt) = policy_topic {
-        client.subscribe(pt.as_str(), qos)
+        client.subscribe(sub_topic(pt).as_str(), qos)
             .expect("Failed to subscribe to mqtt policy topic");
-        info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos);
+        info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos,
+            shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
     } else {
-        info!("Subscribing to mqtt topics {} and {} (QoS {:?})", event_topic.as_str(), heartbeat_topic.as_str(), qos);
+        info!("Subscribing to mqtt topics {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), qos,
+            shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
     }
 
     loop {

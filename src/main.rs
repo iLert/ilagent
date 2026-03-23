@@ -62,6 +62,10 @@ pub fn consumer_args() -> Vec<Arg> {
             .long("filter_val")
             .value_name("FILTER_VAL")
             .help("Along with 'filter_key', requires certain value of JSON payload property"),
+        Arg::new("forward_message_payload")
+            .long("forward_message_payload")
+            .action(ArgAction::SetTrue)
+            .help("Forward the full original JSON payload as customDetails in events"),
         Arg::new("policy_topic")
             .long("policy_topic")
             .value_name("POLICY_TOPIC")
@@ -146,6 +150,10 @@ pub fn build_cli() -> Command {
             .long("mqtt_buffer")
             .action(ArgAction::SetTrue)
             .help("Buffer MQTT messages in SQLite for retry instead of processing directly"))
+        .arg(Arg::new("mqtt_shared_group")
+            .long("mqtt_shared_group")
+            .value_name("MQTT_SHARED_GROUP")
+            .help("MQTT v5 shared subscription group name (topics are prefixed with $share/<group>/ for load balancing)"))
         // kafka
         .arg(Arg::new("kafka_brokers")
             .long("kafka_brokers")
@@ -322,6 +330,11 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
             info!("MQTT buffering enabled — messages will be queued in SQLite for retry");
         }
 
+        if let Some(shared_group) = matches.get_one::<String>("mqtt_shared_group") {
+            config.mqtt_shared_group = Some(shared_group.to_string());
+            info!("MQTT shared subscription group: '{}'", shared_group);
+        }
+
         config = parse_consumer_arguments(matches, config);
     }
 
@@ -374,6 +387,11 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
     if let Some(filter_val) = matches.get_one::<String>("filter_val") {
         config.filter_val = Some(filter_val.to_string());
         info!("Filter key value is present, will be required in event payloads");
+    }
+
+    config.forward_message_payload = matches.get_flag("forward_message_payload");
+    if config.forward_message_payload {
+        info!("Forward message payload enabled — full original JSON will be set as customDetails");
     }
 
     // mappings

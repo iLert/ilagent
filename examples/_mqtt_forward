@@ -1,0 +1,41 @@
+#!/bin/bash
+
+# Example: MQTT event creation with dot-notation mapping and full payload forwarding
+#
+# Given this MQTT payload on topic 'factory/alerts':
+#
+# {
+#     "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+#     "location": "powerplant",
+#     "field": "assembly",
+#     "slot": "nrd023",
+#     "component": "asm_unit02",
+#     "eventTime": "2024-03-15T09:17:45.382Z",
+#     "eventType": "alertCreated",
+#     "source": "monitoringService",
+#     "data": {
+#         "active": true,
+#         "alertId": "f9e8d7c6-b5a4-3210-fedc-ba9876543210",
+#         "priority": 2,
+#         "type": "pressureAlert",
+#         "label": "Pressure Threshold Exceeded",
+#         "message": "Anomaly detected on pump unit 2",
+#         "description": "",
+#         "alarmGroup": []
+#     }
+# }
+#
+# The resulting ilert event will have:
+#   eventType:     ALERT (mapped from 'alertCreated')
+#   summary:       Anomaly detected on pump unit 2 (from 'data.message')
+#   alertKey:      f9e8d7c6-b5a4-3210-fedc-ba9876543210 (from 'data.alertId')
+#   customDetails: the full original payload with topic merged in
+
+cargo run -- daemon -v -v \
+    -m localhost -q 1883 -n ilagent -e 'factory/alerts' \
+    --event_key 'il1api123...' \
+    --map_key_etype 'eventType' \
+    --map_val_etype_alert 'alertCreated' \
+    --map_key_summary 'data.message' \
+    --map_key_alert_key 'data.alertId' \
+    --forward_message_payload
