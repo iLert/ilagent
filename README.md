@@ -4,7 +4,7 @@
 ![Docker Image Version (latest by date)](https://img.shields.io/docker/v/ilert/ilagent?sort=date)
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/iLert/ilagent/docker-release.yml)
 
-The ilert Agent 🦀 📦 is a lightweight program that lets you easily integrate your on-premise systems with ilert.
+ilagent 🦀 📦 is a lightweight program that lets you easily integrate your on-premise systems with ilert.
 
 <p align="center"><img src="/docs/misc/froggo.png?raw=true"/></p>
 

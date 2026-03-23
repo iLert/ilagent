@@ -158,21 +158,21 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 Err(e) => {
                     error!("mqtt error {:?}", e);
                     connected = false;
-                    // this will likely kill the mqtt stream, parent loop will reconnect
-                    continue;
+                    // break to outer loop so exponential backoff applies
+                    break;
                 },
                 _ => ()
             };
 
             if !connected {
                 connected = true;
-                recon_attempts = 0;
                 info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
             }
 
             let event: Event = invoke.unwrap();
             match event {
                 Event::Incoming(Incoming::Publish(message)) => {
+                    recon_attempts = 0;
 
                     let payload = str::from_utf8(&message.payload);
                     if payload.is_err() {

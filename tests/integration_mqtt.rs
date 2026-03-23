@@ -763,8 +763,8 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
     assert_eq!(cd["data"]["label"], "Pressure Threshold Exceeded");
     assert_eq!(cd["data"]["alarmGroup"], serde_json::json!([]));
 
-    // verify MQTT metadata was merged in
-    assert_eq!(cd["topic"], "ilert/events");
+    // verify MQTT metadata is NOT merged into forwarded payload
+    assert!(cd.get("topic").is_none(), "topic should not pollute the original payload");
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }

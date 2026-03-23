@@ -9,12 +9,7 @@ pub fn prepare_consumer_event(config: &ILConfig, payload: &str, topic: &str, def
     let mut event = EventQueueItemJson::parse_event_json(config, payload, topic)?;
     if event.customDetails.is_none() {
         if config.forward_message_payload {
-            let mut payload_json: serde_json::Value = serde_json::from_str(payload).unwrap_or(default_details.clone());
-            if let (Some(payload_obj), Some(defaults_obj)) = (payload_json.as_object_mut(), default_details.as_object()) {
-                for (k, v) in defaults_obj {
-                    payload_obj.entry(k.clone()).or_insert(v.clone());
-                }
-            }
+            let payload_json: serde_json::Value = serde_json::from_str(payload).unwrap_or(default_details.clone());
             event.customDetails = Some(payload_json);
         } else {
             event.customDetails = Some(default_details);
@@ -79,18 +74,7 @@ mod tests {
         let cd = event.customDetails.unwrap();
         assert_eq!(cd["extra"], "data");
         assert_eq!(cd["nested"]["val"], 42);
-        assert_eq!(cd["topic"], "t1");
-    }
-
-    #[test]
-    fn forward_payload_does_not_overwrite_existing_keys() {
-        let mut config = ILConfig::new();
-        config.forward_message_payload = true;
-        let payload = r#"{"apiKey": "k1", "eventType": "ALERT", "summary": "test", "topic": "original"}"#;
-        let details = serde_json::json!({"topic": "injected"});
-        let event = prepare_consumer_event(&config, payload, "t1", details).unwrap();
-        let cd = event.customDetails.unwrap();
-        assert_eq!(cd["topic"], "original", "payload key should not be overwritten by metadata");
+        assert!(cd.get("topic").is_none(), "metadata should not be merged into forwarded payload");
     }
 
     #[test]

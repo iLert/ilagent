@@ -54,19 +54,19 @@ pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
     Some(json)
 }
 
-pub fn extract_routing_keys<'a>(config: &ILConfig, json: &'a Value) -> Vec<&'a str> {
-    let routing_keys_config = match config.policy_routing_keys.as_ref() {
-        Some(v) => v,
-        None => return Vec::new(),
-    };
+pub fn extract_routing_key(config: &ILConfig, json: &Value) -> Option<String> {
+    let routing_keys_config = config.policy_routing_keys.as_ref()?;
 
-    routing_keys_config
+    let combined: String = routing_keys_config
         .split(',')
         .filter_map(|field| {
             let field = field.trim();
-            json.get(field).and_then(|v| v.as_str())
+            json.get(field).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
         })
-        .collect()
+        .collect::<Vec<_>>()
+        .join("");
+
+    if combined.is_empty() { None } else { Some(combined) }
 }
 
 pub fn extract_shift(config: &ILConfig, json: &Value) -> u64 {
@@ -139,7 +139,8 @@ async fn update_policy_level(ilert_client: &ILert, policy_id: i64, shift: u64, u
         info!("Successfully updated escalation policy {} level {} with user", policy_id, shift);
         Ok(())
     } else {
-        warn!("Update policy {} level {} returned status {}", policy_id, shift, status);
+        warn!("Update policy {} level {} returned status {}: {}", policy_id, shift, status,
+            result.body_raw.unwrap_or_else(|| "no body".to_string()));
         Err(status)
     }
 }
@@ -155,16 +156,17 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
         None => return false,
     };
     let shift = extract_shift(config, &json);
-    let routing_keys = extract_routing_keys(config, &json);
+    let routing_key = match extract_routing_key(config, &json) {
+        Some(k) => k,
+        None => {
+            warn!("No routing key could be extracted from policy message");
+            return false;
+        }
+    };
 
-    if routing_keys.is_empty() {
-        warn!("No routing keys could be extracted from policy message");
-        return false;
-    }
+    debug!("Policy update: email={}, shift={}, routing_key={}", email, shift, routing_key);
 
-    debug!("Policy update: email={}, shift={}, routing_keys={:?}", email, shift, routing_keys);
-
-    // resolve user once
+    // resolve user
     let user = match resolve_user_by_email(ilert_client, &email).await {
         Ok(u) => u,
         Err(status) => {
@@ -173,36 +175,48 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
         }
     };
 
-    // for each routing key, resolve policy and update level
-    let mut should_retry = false;
-    for routing_key in routing_keys {
-        let policy = match resolve_escalation_policy(ilert_client, routing_key).await {
-            Ok(p) => p,
-            Err(status) => {
-                warn!("Could not resolve escalation policy for routing key '{}'", routing_key);
-                if is_retryable_status(status) {
-                    should_retry = true;
-                }
-                continue;
-            }
-        };
-
-        let policy_id = match policy.get("id").and_then(|v| v.as_i64()) {
-            Some(id) => id,
-            None => {
-                error!("Escalation policy response missing 'id' field for routing key '{}'", routing_key);
-                continue;
-            }
-        };
-
-        if let Err(status) = update_policy_level(ilert_client, policy_id, shift, &user).await {
-            if is_retryable_status(status) {
-                should_retry = true;
-            }
+    let user_id = match user.get("id").and_then(|v| v.as_i64()) {
+        Some(id) => id,
+        None => {
+            error!("User resolve response missing 'id' field for email '{}'", email);
+            return false;
         }
-    }
+    };
 
-    should_retry
+    // resolve escalation policy
+    let policy = match resolve_escalation_policy(ilert_client, &routing_key).await {
+        Ok(p) => p,
+        Err(status) => {
+            warn!("Could not resolve escalation policy for routing key '{}'", routing_key);
+            return is_retryable_status(status);
+        }
+    };
+
+    let policy_id = match policy.get("id").and_then(|v| v.as_i64()) {
+        Some(id) => id,
+        None => {
+            error!("Escalation policy response missing 'id' field for routing key '{}'", routing_key);
+            return false;
+        }
+    };
+
+    // get current escalation timeout from the target level if available
+    let escalation_timeout = policy.get("escalationRules")
+        .and_then(|rules| rules.as_array())
+        .and_then(|rules| rules.get(shift as usize))
+        .and_then(|rule| rule.get("escalationTimeout"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1);
+
+    let escalation_rule = serde_json::json!({
+        "escalationTimeout": escalation_timeout,
+        "users": [{"id": user_id}]
+    });
+
+    match update_policy_level(ilert_client, policy_id, shift, &escalation_rule).await {
+        Ok(_) => false,
+        Err(status) => is_retryable_status(status),
+    }
 }
 
 #[cfg(test)]
@@ -361,47 +375,50 @@ mod tests {
     // --- routing keys ---
 
     #[test]
-    fn extract_routing_keys_single() {
+    fn extract_routing_key_single() {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        let keys = extract_routing_keys(&config, &json);
-        assert_eq!(keys, vec!["powerplant"]);
+        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplant");
     }
 
     #[test]
-    fn extract_routing_keys_multiple() {
+    fn extract_routing_key_multiple_concatenated() {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location,slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        let keys = extract_routing_keys(&config, &json);
-        assert_eq!(keys, vec!["powerplant", "three50"]);
+        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
     }
 
     #[test]
-    fn extract_routing_keys_with_spaces() {
+    fn extract_routing_key_with_spaces() {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location , slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        let keys = extract_routing_keys(&config, &json);
-        assert_eq!(keys, vec!["powerplant", "three50"]);
+        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
     }
 
     #[test]
-    fn extract_routing_keys_missing_field_skipped() {
+    fn extract_routing_key_missing_field_skipped() {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location,nonexistent,slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        let keys = extract_routing_keys(&config, &json);
-        assert_eq!(keys, vec!["powerplant", "three50"]);
+        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
     }
 
     #[test]
-    fn extract_routing_keys_none_configured() {
+    fn extract_routing_key_none_configured() {
         let config = ILConfig::new();
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        let keys = extract_routing_keys(&config, &json);
-        assert!(keys.is_empty());
+        assert!(extract_routing_key(&config, &json).is_none());
+    }
+
+    #[test]
+    fn extract_routing_key_all_empty_returns_none() {
+        let mut config = ILConfig::new();
+        config.policy_routing_keys = Some("nonexistent".to_string());
+        let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
+        assert!(extract_routing_key(&config, &json).is_none());
     }
 
     // --- filter ---

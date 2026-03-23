@@ -28,7 +28,11 @@ async fn policy_update_single_routing_key() {
         .and(query_param("routing-key", "powerplant"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": 42,
-            "name": "Powerplant Policy"
+            "name": "Powerplant Policy",
+            "escalationRules": [
+                {"escalationTimeout": 0},
+                {"escalationTimeout": 5}
+            ]
         })))
         .expect(1)
         .mount(&mock_server)
@@ -48,6 +52,7 @@ async fn policy_update_single_routing_key() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/42/levels/1"))
+        .and(body_json(json!({"escalationTimeout": 5, "users": [{"id": 99}]})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
@@ -66,21 +71,20 @@ async fn policy_update_single_routing_key() {
 }
 
 #[tokio::test]
-async fn policy_update_multiple_routing_keys() {
+async fn policy_update_multiple_routing_keys_concatenated() {
     let mock_server = MockServer::start().await;
 
+    // routing keys "location,slot" should be concatenated to "powerplantthree50"
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routing-key", "powerplant"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 10})))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routing-key", "three50"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 20})))
+        .and(query_param("routing-key", "powerplantthree50"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 10,
+            "escalationRules": [
+                {"escalationTimeout": 0},
+                {"escalationTimeout": 3}
+            ]
+        })))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -94,13 +98,7 @@ async fn policy_update_multiple_routing_keys() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/10/levels/1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    Mock::given(method("PUT"))
-        .and(path("/api/escalation-policies/20/levels/1"))
+        .and(body_json(json!({"escalationTimeout": 3, "users": [{"id": 99}]})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
@@ -131,7 +129,10 @@ async fn policy_update_shift_defaults_to_zero() {
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
         .and(query_param("routing-key", "plant-a"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 5})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 5,
+            "escalationRules": [{"escalationTimeout": 0}]
+        })))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -145,6 +146,7 @@ async fn policy_update_shift_defaults_to_zero() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/5/levels/0"))
+        .and(body_json(json!({"escalationTimeout": 0, "users": [{"id": 1}]})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
@@ -175,7 +177,14 @@ async fn policy_update_with_custom_field_paths() {
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
         .and(query_param("routing-key", "east"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 7})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": 7,
+            "escalationRules": [
+                {"escalationTimeout": 0},
+                {"escalationTimeout": 0},
+                {"escalationTimeout": 10}
+            ]
+        })))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -190,6 +199,7 @@ async fn policy_update_with_custom_field_paths() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/7/levels/2"))
+        .and(body_json(json!({"escalationTimeout": 10, "users": [{"id": 3}]})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)

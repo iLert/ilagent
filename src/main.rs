@@ -95,7 +95,7 @@ pub fn consumer_args() -> Vec<Arg> {
 
 pub fn build_cli() -> Command {
     let mut daemon_cmd = Command::new("daemon")
-        .about("Run the agent as a daemon with optional HTTP server, MQTT, and Kafka consumers")
+        .about("Run ilagent as a daemon with optional HTTP server, MQTT, and Kafka consumers")
         .arg(Arg::new("port")
             .short('p')
             .long("port")
@@ -234,10 +234,10 @@ pub fn build_cli() -> Command {
             .required(true)
             .help("Sets the resource target to clean up"));
 
-    Command::new("ilert Agent")
+    Command::new("ilagent")
         .version(env!("CARGO_PKG_VERSION"))
         .author("ilert GmbH. <support@ilert.com>")
-        .about("ilert Agent - The swiss army knife.")
+        .about(format!("ilagent {} — Bridge your infrastructure to ilert.", env!("CARGO_PKG_VERSION")))
         .subcommand_required(true)
         .arg_required_else_help(true)
         .arg(Arg::new("v")
