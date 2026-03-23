@@ -11,6 +11,7 @@ pub mod consumers;
 pub mod poll;
 pub mod http_server;
 pub mod cleanup;
+pub mod version_check;
 
 pub struct DaemonContext {
     pub config: config::ILConfig,

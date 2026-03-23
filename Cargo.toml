@@ -20,6 +20,7 @@ ctrlc = { version = "3.5" }
 rusqlite = { version = "0.38", features = ["bundled"] } # SQLite 3.46.0
 rumqttc = "0.25"
 rdkafka = { version = "0.39", features = ["cmake-build"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 [dev-dependencies]
 actix-rt = "2"

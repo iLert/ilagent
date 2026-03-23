@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
-use ilagent::{DaemonContext, hbt, poll, consumers, http_server, cleanup};
+use ilagent::{DaemonContext, hbt, poll, consumers, http_server, cleanup, version_check};
 
 pub fn consumer_args() -> Vec<Arg> {
     vec![
@@ -277,6 +277,8 @@ async fn main() {
     env_logger::Builder::from_env(Env::default()
         .default_filter_or(log_level))
         .init();
+
+    version_check::spawn_version_check();
 
     match matches.subcommand() {
         Some(("daemon", sub_m)) => {

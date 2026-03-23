@@ -6,7 +6,11 @@ else
   set -o xtrace
 fi
 
-VERSION="0.7.0"
+VERSION=$(curl -sI https://github.com/iLert/ilagent/releases/latest | grep -i '^location:' | sed 's|.*/||' | tr -d '\r\n')
+if [ -z "$VERSION" ]; then
+  echo "Failed to determine latest release version."
+  exit 1
+fi
 
 # Prompt user to run a command with sudo; show exact command first
 run_with_sudo_prompt() {
