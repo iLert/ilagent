@@ -1,2 +1,2 @@
 #!/bin/bash
-cargo run -- heartbeat -v -v -k il1hbt123
+ilagent heartbeat -v -v -k il1hbt123

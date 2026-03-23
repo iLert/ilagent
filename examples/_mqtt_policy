@@ -1,5 +1,5 @@
 #!/bin/bash
-ILERT_API_KEY='il1api...' cargo run -- daemon -v -v \
+ILERT_API_KEY='il1api...' ilagent daemon -v -v \
     -m localhost -q 1883 -n ilagent \
     --policy_topic 'user/logins' \
     --policy_routing_keys 'location,slot' \
