@@ -45,6 +45,7 @@ pub struct ILConfig {
     pub map_key_email: Option<String>,
     pub map_key_shift: Option<String>,
     pub shift_offset: i64,
+    pub max_retries: u32,
 }
 
 impl ILConfig {
@@ -89,6 +90,7 @@ impl ILConfig {
             map_key_email: None,
             map_key_shift: None,
             shift_offset: 0,
+            max_retries: 100,
         }
     }
 

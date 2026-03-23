@@ -10,3 +10,20 @@ ILERT_API_KEY='il1api...' ilagent daemon -v -v \
     --filter_val 'active' \
     --mqtt_qos 1 \
     --mqtt_buffer
+
+
+    ILERT_API_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJpbGVydCIsImlsX2siOiI3Y2E5MDg5MmFhN2E0NDAyOTdiZjI1NjUxNTQ3NTlhNiIsImlsX3QiOiJBUEkiLCJpbF92IjoyfQ.SbLsaS492Wc37tdCFkWlr2IbVtvwpRycUjWsWn-hLrA' ilagent daemon -v -v \
+          -m localhost -q 1883 -n ilagent \
+          --policy_topic 'user/logins' \
+          --policy_routing_keys 'location,slot' \
+          --map_key_email 'data.email' \
+          --map_key_shift 'data.shift' \
+          --shift_offset=-1 \
+          --filter_key 'eventType' \
+          --filter_val 'active' \
+          --mqtt_qos 1 \
+          --mqtt_buffer
+
+
+  /opt/homebrew/bin/mosquitto_pub -h localhost -p 1883 -t 'user/logins' \
+        -m '{"location":"powerplant","slot":"-15","eventType":"active","data":{"email":"chris@ilert.com","shift":"2"}}'

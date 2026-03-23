@@ -25,7 +25,7 @@ async fn policy_update_single_routing_key() {
 
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routingKey", "powerplant"))
+        .and(query_param("routing-key", "powerplant"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": 42,
             "name": "Powerplant Policy"
@@ -35,7 +35,7 @@ async fn policy_update_single_routing_key() {
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/api/users/resolve"))
+        .and(path("/api/users/search-email"))
         .and(body_json(json!({"email": "support@ilert.com"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "id": 99,
@@ -71,7 +71,7 @@ async fn policy_update_multiple_routing_keys() {
 
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routingKey", "powerplant"))
+        .and(query_param("routing-key", "powerplant"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 10})))
         .expect(1)
         .mount(&mock_server)
@@ -79,14 +79,14 @@ async fn policy_update_multiple_routing_keys() {
 
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routingKey", "three50"))
+        .and(query_param("routing-key", "three50"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 20})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/api/users/resolve"))
+        .and(path("/api/users/search-email"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 99, "email": "support@ilert.com"})))
         .expect(1)
         .mount(&mock_server)
@@ -130,14 +130,14 @@ async fn policy_update_shift_defaults_to_zero() {
 
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routingKey", "plant-a"))
+        .and(query_param("routing-key", "plant-a"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 5})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/api/users/resolve"))
+        .and(path("/api/users/search-email"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1, "email": "test@ilert.com"})))
         .expect(1)
         .mount(&mock_server)
@@ -174,14 +174,14 @@ async fn policy_update_with_custom_field_paths() {
 
     Mock::given(method("GET"))
         .and(path("/api/escalation-policies/resolve"))
-        .and(query_param("routingKey", "east"))
+        .and(query_param("routing-key", "east"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 7})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
-        .and(path("/api/users/resolve"))
+        .and(path("/api/users/search-email"))
         .and(body_json(json!({"email": "custom@ilert.com"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 3})))
         .expect(1)
@@ -208,11 +208,32 @@ async fn policy_update_with_custom_field_paths() {
 }
 
 #[tokio::test]
-async fn policy_update_user_resolve_fails_retries() {
+async fn policy_update_user_resolve_server_error_retries() {
     let mock_server = MockServer::start().await;
 
     Mock::given(method("POST"))
-        .and(path("/api/users/resolve"))
+        .and(path("/api/users/search-email"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let mut config = ILConfig::new();
+    config.policy_routing_keys = Some("location".to_string());
+
+    let should_retry = handle_policy_update(&ilert_client, &config, SAMPLE_PAYLOAD).await;
+    assert!(should_retry, "should retry on server error (5xx)");
+}
+
+#[tokio::test]
+async fn policy_update_user_resolve_client_error_no_retry() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/users/search-email"))
         .respond_with(ResponseTemplate::new(404))
         .expect(1)
         .mount(&mock_server)
@@ -225,7 +246,7 @@ async fn policy_update_user_resolve_fails_retries() {
     config.policy_routing_keys = Some("location".to_string());
 
     let should_retry = handle_policy_update(&ilert_client, &config, SAMPLE_PAYLOAD).await;
-    assert!(should_retry, "should retry when user resolve fails");
+    assert!(!should_retry, "should not retry on client error (4xx)");
 }
 
 #[tokio::test]

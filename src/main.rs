@@ -86,6 +86,10 @@ pub fn consumer_args() -> Vec<Arg> {
             .long("shift_offset")
             .value_name("SHIFT_OFFSET")
             .help("Offset to apply to the shift value (e.g. -1 to convert 1-indexed to 0-indexed, default: 0)"),
+        Arg::new("max_retries")
+            .long("max_retries")
+            .value_name("MAX_RETRIES")
+            .help("Maximum number of retries for failed queue items (0 = unlimited, default: 100)"),
     ]
 }
 
@@ -458,6 +462,15 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
     if let Some(shift_offset) = matches.get_one::<String>("shift_offset") {
         config.shift_offset = shift_offset.parse::<i64>().expect("Failed to parse shift_offset as integer");
         info!("Shift offset has been configured: {}", config.shift_offset);
+    }
+
+    if let Some(max_retries) = matches.get_one::<String>("max_retries") {
+        config.max_retries = max_retries.parse::<u32>().expect("Failed to parse max_retries as integer");
+        if config.max_retries == 0 {
+            info!("Max retries set to unlimited");
+        } else {
+            info!("Max retries has been configured: {}", config.max_retries);
+        }
     }
 
     config

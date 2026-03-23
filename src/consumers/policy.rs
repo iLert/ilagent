@@ -1,6 +1,7 @@
 use log::{info, warn, error, debug};
 use serde_json::Value;
 use ilert::ilert::ILert;
+use ilert::ilert_builders::{UserPostApiResource, EscalationPolicyGetApiResource, EscalationPolicyPutApiResource};
 
 use crate::config::ILConfig;
 use crate::json_util::get_nested_value;
@@ -84,104 +85,62 @@ pub fn extract_email<'a>(config: &ILConfig, json: &'a Value) -> Option<&'a str> 
         .filter(|e| !e.is_empty())
 }
 
-async fn resolve_escalation_policy(ilert_client: &ILert, routing_key: &str) -> Option<Value> {
-    let url = ilert_client.build_url("/escalation-policies/resolve");
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
 
-    let mut request = ilert_client.http_client
-        .get(&url)
-        .query(&[("routingKey", routing_key)]);
-
-    if let Some(ref token) = ilert_client.api_token {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let response = match request.send().await {
+async fn resolve_escalation_policy(ilert_client: &ILert, routing_key: &str) -> Result<Value, u16> {
+    let result = match ilert_client.get().escalation_policy_resolve(routing_key).execute().await {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to resolve escalation policy for routing key '{}': {}", routing_key, e);
-            return None;
+            return Err(0); // network error, treat as retryable
         }
     };
 
-    let status = response.status().as_u16();
+    let status = result.status.as_u16();
     if status != 200 {
         warn!("Resolve escalation policy for '{}' returned status {}", routing_key, status);
-        return None;
+        return Err(status);
     }
 
-    match response.json::<Value>().await {
-        Ok(body) => Some(body),
-        Err(e) => {
-            error!("Failed to parse escalation policy response: {}", e);
-            None
-        }
-    }
+    result.body_json.ok_or(0)
 }
 
-async fn resolve_user_by_email(ilert_client: &ILert, email: &str) -> Option<Value> {
-    let url = ilert_client.build_url("/users/resolve");
-
-    let body = serde_json::json!({"email": email});
-
-    let mut request = ilert_client.http_client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .body(body.to_string());
-
-    if let Some(ref token) = ilert_client.api_token {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let response = match request.send().await {
+async fn resolve_user_by_email(ilert_client: &ILert, email: &str) -> Result<Value, u16> {
+    let result = match ilert_client.create().user_search_email(email).execute().await {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to resolve user by email '{}': {}", email, e);
-            return None;
+            return Err(0); // network error, treat as retryable
         }
     };
 
-    let status = response.status().as_u16();
+    let status = result.status.as_u16();
     if status != 200 {
         warn!("Resolve user for '{}' returned status {}", email, status);
-        return None;
+        return Err(status);
     }
 
-    match response.json::<Value>().await {
-        Ok(body) => Some(body),
-        Err(e) => {
-            error!("Failed to parse user resolve response: {}", e);
-            None
-        }
-    }
+    result.body_json.ok_or(0)
 }
 
-async fn update_policy_level(ilert_client: &ILert, policy_id: i64, shift: u64, user: &Value) -> bool {
-    let url = ilert_client.build_url(&format!("/escalation-policies/{}/levels/{}", policy_id, shift));
-
-    let mut request = ilert_client.http_client
-        .put(&url)
-        .header("Content-Type", "application/json")
-        .body(user.to_string());
-
-    if let Some(ref token) = ilert_client.api_token {
-        request = request.header("Authorization", format!("Bearer {}", token));
-    }
-
-    let response = match request.send().await {
+async fn update_policy_level(ilert_client: &ILert, policy_id: i64, shift: u64, user: &Value) -> Result<(), u16> {
+    let result = match ilert_client.update().escalation_policy_level_raw(policy_id, shift as i32, user).execute().await {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to update policy {} level {}: {}", policy_id, shift, e);
-            return false;
+            return Err(0); // network error, treat as retryable
         }
     };
 
-    let status = response.status().as_u16();
+    let status = result.status.as_u16();
     if status == 200 {
         info!("Successfully updated escalation policy {} level {} with user", policy_id, shift);
-        true
+        Ok(())
     } else {
         warn!("Update policy {} level {} returned status {}", policy_id, shift, status);
-        false
+        Err(status)
     }
 }
 
@@ -207,19 +166,23 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
 
     // resolve user once
     let user = match resolve_user_by_email(ilert_client, &email).await {
-        Some(u) => u,
-        None => {
+        Ok(u) => u,
+        Err(status) => {
             error!("Could not resolve user for email '{}'", email);
-            return true; // retry
+            return is_retryable_status(status);
         }
     };
 
     // for each routing key, resolve policy and update level
+    let mut should_retry = false;
     for routing_key in routing_keys {
         let policy = match resolve_escalation_policy(ilert_client, routing_key).await {
-            Some(p) => p,
-            None => {
+            Ok(p) => p,
+            Err(status) => {
                 warn!("Could not resolve escalation policy for routing key '{}'", routing_key);
+                if is_retryable_status(status) {
+                    should_retry = true;
+                }
                 continue;
             }
         };
@@ -232,10 +195,14 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
             }
         };
 
-        update_policy_level(ilert_client, policy_id, shift, &user).await;
+        if let Err(status) = update_policy_level(ilert_client, policy_id, shift, &user).await {
+            if is_retryable_status(status) {
+                should_retry = true;
+            }
+        }
     }
 
-    false // no retry needed
+    should_retry
 }
 
 #[cfg(test)]

@@ -314,7 +314,7 @@ async fn mqtt_policy_buffer_drain() {
         .await;
 
     Mock::given(method("POST"))
-        .and(path_regex("/api/users/resolve"))
+        .and(path_regex("/api/users/search-email"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": 99, "email": "support@ilert.com", "username": "support"
@@ -409,7 +409,7 @@ async fn mqtt_policy_buffer_retry_on_failure() {
 
     // user resolve returns 500 — will cause retry
     Mock::given(method("POST"))
-        .and(path_regex("/api/users/resolve"))
+        .and(path_regex("/api/users/search-email"))
         .respond_with(ResponseTemplate::new(500))
         .mount(&mock_server)
         .await;
@@ -535,6 +535,145 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     let db = ILDatabase::new(&db_path);
     let remaining = db.get_mqtt_queue_items(10).unwrap();
     assert!(remaining.is_empty(), "filtered message should be removed from queue");
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
+/// MQTT policy with buffer: message is dropped after exceeding max_retries
+#[tokio::test]
+async fn mqtt_policy_buffer_max_retries_drops_message() {
+    let (_container, port) = start_mosquitto().await;
+    let mock_server = MockServer::start().await;
+
+    // user resolve always returns 500 — will cause retry every time
+    Mock::given(method("POST"))
+        .and(path_regex("/api/users/search-email"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.policy_topic = Some("ilert/policies".to_string());
+    config.policy_routing_keys = Some("location".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+    config.max_retries = 2;
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // publish policy message
+    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+        "location": "powerplant",
+        "eventType": "active",
+        "data": { "email": "support@ilert.com", "shift": "1" }
+    }"#);
+
+    // wait for poll to exhaust retries — needs ~10s first poll + 20s backoff for 2 attempts
+    tokio::time::sleep(Duration::from_secs(35)).await;
+
+    // verify message was dropped from queue after exceeding max retries
+    let db = ILDatabase::new(&db_path);
+    let queued = db.get_mqtt_queue_items(10).unwrap();
+    assert!(queued.is_empty(), "message should be dropped after exceeding max_retries");
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}
+
+/// MQTT policy with buffer: unlimited retries (max_retries=0) keeps message in queue
+#[tokio::test]
+async fn mqtt_policy_buffer_unlimited_retries_keeps_message() {
+    let (_container, port) = start_mosquitto().await;
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path_regex("/api/users/search-email"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.policy_topic = Some("ilert/policies".to_string());
+    config.policy_routing_keys = Some("location".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+    config.max_retries = 0; // unlimited
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    ilert_client.auth_via_token("test-api-key").unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let ctx_clone = daemon_ctx.clone();
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+        "location": "powerplant",
+        "eventType": "active",
+        "data": { "email": "support@ilert.com", "shift": "1" }
+    }"#);
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    // with unlimited retries, message should still be in queue
+    let db = ILDatabase::new(&db_path);
+    let queued = db.get_mqtt_queue_items(10).unwrap();
+    assert_eq!(queued.len(), 1, "message should remain in queue with unlimited retries");
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }

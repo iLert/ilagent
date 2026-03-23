@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use log::{info, warn, error};
@@ -20,6 +21,7 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mut interval_ms: u64 = EVENT_POLL_MAX_MS;
     let mut last_run = Instant::now();
+    let mut retry_counts: HashMap<String, u32> = HashMap::new();
     while daemon_ctx.running.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(250)).await;
 
@@ -35,7 +37,7 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 let count = items.len();
                 if count > 0 {
                     info!("Found {} queued events.", count);
-                    let had_failures = process_queued_events(daemon_ctx.clone(), items).await;
+                    let had_failures = process_queued_events(daemon_ctx.clone(), items, &mut retry_counts).await;
                     if had_failures {
                         interval_ms = (interval_ms * 2).min(EVENT_POLL_RETRY_MAX_MS);
                         warn!("Event queue had failures, backing off to {}ms", interval_ms);
@@ -55,21 +57,37 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 }
 
 /// Returns true if any events failed and need retry.
-async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<EventQueueItem>) -> bool {
+async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<EventQueueItem>, retry_counts: &mut HashMap<String, u32>) -> bool {
 
+    let max_retries = daemon_ctx.config.max_retries;
     let mut had_failures = false;
     for event in events.iter() {
         let should_retry = send_queued_event(&daemon_ctx.ilert_client, event).await;
         let event_id = event.id.clone().unwrap_or("".to_string());
         if !should_retry {
+            retry_counts.remove(&event_id);
             let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
             match del_result {
                 Ok(_) => info!("Removed event {} from queue", event_id),
-                _ => warn!("Failed to remove event {} from queue",event_id)
+                _ => warn!("Failed to remove event {} from queue", event_id)
             };
         } else {
-            warn!("Failed to process event {} will retry", event_id);
-            had_failures = true;
+            let count = retry_counts.entry(event_id.clone()).or_insert(0);
+            *count += 1;
+
+            if max_retries > 0 && *count >= max_retries {
+                error!("Event {} exceeded max retries ({}), dropping", event_id, max_retries);
+                retry_counts.remove(&event_id);
+                let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
+                match del_result {
+                    Ok(_) => info!("Removed event {} from queue after max retries", event_id),
+                    _ => warn!("Failed to remove event {} from queue", event_id)
+                };
+            } else {
+                warn!("Failed to process event {} will retry ({}/{})", event_id, count,
+                    if max_retries == 0 { "unlimited".to_string() } else { max_retries.to_string() });
+                had_failures = true;
+            }
         }
     }
 
@@ -176,6 +194,7 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mut interval_ms: u64 = MQTT_POLL_MAX_MS;
     let mut last_run = Instant::now();
+    let mut retry_counts: HashMap<String, u32> = HashMap::new();
     while daemon_ctx.running.load(Ordering::Relaxed) {
         tokio::time::sleep(Duration::from_millis(250)).await;
 
@@ -191,7 +210,7 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 let count = items.len();
                 if count > 0 {
                     info!("Found {} queued mqtt messages.", count);
-                    let had_failures = process_mqtt_queue(daemon_ctx.clone(), items).await;
+                    let had_failures = process_mqtt_queue(daemon_ctx.clone(), items, &mut retry_counts).await;
                     if had_failures {
                         // back off exponentially on failures, cap at 60s
                         interval_ms = (interval_ms * 2).min(MQTT_POLL_RETRY_MAX_MS);
@@ -214,11 +233,12 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 }
 
 /// Returns true if any items failed and need retry.
-async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueueItem>) -> bool {
+async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueueItem>, retry_counts: &mut HashMap<String, u32>) -> bool {
 
     let event_topic = daemon_ctx.config.event_topic.clone().unwrap_or_default();
     let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().unwrap_or_default();
     let policy_topic = daemon_ctx.config.policy_topic.clone();
+    let max_retries = daemon_ctx.config.max_retries;
     let mut had_failures = false;
 
     for item in items.iter() {
@@ -242,14 +262,29 @@ async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueue
         };
 
         if !should_retry {
+            retry_counts.remove(&item_id);
             let del_result = daemon_ctx.db.lock().await.delete_mqtt_queue_item(&item_id);
             match del_result {
                 Ok(_) => info!("Removed mqtt queue item {} from queue", item_id),
                 _ => warn!("Failed to remove mqtt queue item {} from queue", item_id)
             };
         } else {
-            warn!("Failed to process mqtt queue item {} will retry", item_id);
-            had_failures = true;
+            let count = retry_counts.entry(item_id.clone()).or_insert(0);
+            *count += 1;
+
+            if max_retries > 0 && *count >= max_retries {
+                error!("MQTT queue item {} exceeded max retries ({}), dropping", item_id, max_retries);
+                retry_counts.remove(&item_id);
+                let del_result = daemon_ctx.db.lock().await.delete_mqtt_queue_item(&item_id);
+                match del_result {
+                    Ok(_) => info!("Removed mqtt queue item {} from queue after max retries", item_id),
+                    _ => warn!("Failed to remove mqtt queue item {} from queue", item_id)
+                };
+            } else {
+                warn!("Failed to process mqtt queue item {} will retry ({}/{})", item_id, count,
+                    if max_retries == 0 { "unlimited".to_string() } else { max_retries.to_string() });
+                had_failures = true;
+            }
         }
     }
 

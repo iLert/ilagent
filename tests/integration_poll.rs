@@ -1,8 +1,17 @@
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use tempfile::NamedTempFile;
+use tokio::sync::Mutex;
 use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path_regex};
 use ilert::ilert::ILert;
+use ilagent::config::ILConfig;
+use ilagent::db::ILDatabase;
+use ilagent::DaemonContext;
 use ilagent::models::event_db::EventQueueItem;
-use ilagent::poll::send_queued_event;
+use ilagent::poll::{send_queued_event, run_poll_job};
 
 fn alert_event() -> EventQueueItem {
     let mut event = EventQueueItem::new_with_required("il1apikey123", "ALERT", "Server down", Some("host-1".to_string()));
@@ -283,4 +292,106 @@ async fn send_event_without_id_still_works() {
     let event = EventQueueItem::new_with_required("k1", "ALERT", "test", None);
     let should_retry = send_queued_event(&ilert_client, &event).await;
     assert!(!should_retry);
+}
+
+// --- event poll: max_retries drops event after limit ---
+
+#[tokio::test]
+async fn event_poll_max_retries_drops_event() {
+    let mock_server = MockServer::start().await;
+
+    // always return 500 to trigger retries
+    Mock::given(method("POST"))
+        .and(path_regex(".*"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.db_file = db_path.clone();
+    config.max_retries = 2;
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    // insert a failing event directly into the DB
+    let event = EventQueueItem::new_with_required("il1apikey123", "ALERT", "Server down", Some("host-1".to_string()));
+    db.create_il_event(&event).unwrap();
+
+    let queued = db.get_il_events(10).unwrap();
+    assert_eq!(queued.len(), 1, "event should be in queue");
+
+    let ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_poll_job(poll_ctx).await;
+    });
+
+    // wait for poll to exhaust retries — needs ~5s first poll + 10s backoff for 2 attempts
+    tokio::time::sleep(Duration::from_secs(20)).await;
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = ILDatabase::new(&db_path);
+    let remaining = db.get_il_events(10).unwrap();
+    assert!(remaining.is_empty(), "event should be dropped after exceeding max_retries");
+}
+
+// --- event poll: unlimited retries (max_retries=0) keeps event in queue ---
+
+#[tokio::test]
+async fn event_poll_unlimited_retries_keeps_event() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path_regex(".*"))
+        .respond_with(ResponseTemplate::new(500))
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.db_file = db_path.clone();
+    config.max_retries = 0; // unlimited
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let event = EventQueueItem::new_with_required("il1apikey123", "ALERT", "Server down", Some("host-1".to_string()));
+    db.create_il_event(&event).unwrap();
+
+    let ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = ILDatabase::new(&db_path);
+    let remaining = db.get_il_events(10).unwrap();
+    assert_eq!(remaining.len(), 1, "event should remain in queue with unlimited retries");
 }
