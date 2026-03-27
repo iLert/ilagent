@@ -184,7 +184,7 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
     if skipped_alerts_count > 0 {
         warn!("Skipped {} alerts that did not match the responder filter client-side", skipped_alerts_count);
     }
-    info!("Resolved a total of {} alerts", resolved_alerts_count);
+    warn!("Resolved a total of {} alerts", resolved_alerts_count);
     ()
 }
 
@@ -269,6 +269,6 @@ pub async fn cleanup_incidents(ilert_client: &ILert) -> () {
         info!("Resolved {} incidents...", resolved_incidents_count);
     }
 
-    info!("Resolved a total of {} incidents", resolved_incidents_count);
+    warn!("Resolved a total of {} incidents", resolved_incidents_count);
     ()
 }

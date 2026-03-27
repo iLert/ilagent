@@ -14,6 +14,18 @@ use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
 use ilagent::{DaemonContext, hbt, poll, consumers, http_server, cleanup, version_check};
 
+fn strip_bearer_prefix(key: String) -> String {
+    if let Some(stripped) = key.strip_prefix("Bearer ") {
+        warn!("Stripping unnecessary 'Bearer ' prefix from API key");
+        stripped.to_string()
+    } else if let Some(stripped) = key.strip_prefix("bearer ") {
+        warn!("Stripping unnecessary 'bearer ' prefix from API key");
+        stripped.to_string()
+    } else {
+        key
+    }
+}
+
 pub fn consumer_args() -> Vec<Arg> {
     vec![
         Arg::new("event_topic")
@@ -269,7 +281,7 @@ async fn main() {
     let matches = build_cli().get_matches();
 
     let log_level = match matches.get_count("v") {
-        0 => "error",
+        0 => "warn",
         1 => "warn",
         2 => "info",
         3 => "debug",
@@ -442,7 +454,7 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
     }
 
     if let Ok(api_key) = std::env::var("ILERT_API_KEY") {
-        config.api_key = Some(api_key);
+        config.api_key = Some(strip_bearer_prefix(api_key));
         info!("API key has been configured from ILERT_API_KEY environment variable");
     }
 
@@ -1037,7 +1049,7 @@ async fn run_heartbeat(matches: &ArgMatches) {
     Attempts to clean-up resources
 */
 async fn run_cleanup(matches: &ArgMatches) {
-    let api_key = std::env::var("ILERT_API_KEY").expect("ILERT_API_KEY environment variable is required for cleanup");
+    let api_key = strip_bearer_prefix(std::env::var("ILERT_API_KEY").expect("ILERT_API_KEY environment variable is required for cleanup"));
     let mut ilert_client = ILert::new().expect("Failed to create ilert client");
     ilert_client.auth_via_token(&api_key).expect("Failed to set api key");
 
