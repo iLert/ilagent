@@ -18,27 +18,40 @@ pub enum MessageType {
     Ignored,
 }
 
+fn topic_filter_matches(filter: &str, topic: &str) -> bool {
+    let filter_parts: Vec<&str> = filter.split('/').collect();
+    let topic_parts: Vec<&str> = topic.split('/').collect();
+
+    for (i, f) in filter_parts.iter().enumerate() {
+        if *f == "#" {
+            return true;
+        }
+        if i >= topic_parts.len() {
+            return false;
+        }
+        if *f != "+" && *f != topic_parts[i] {
+            return false;
+        }
+    }
+    filter_parts.len() == topic_parts.len()
+}
+
 pub fn classify_message(message_topic: &str, event_topic: &str, heartbeat_topic: &str, policy_topic: Option<&str>) -> MessageType {
     if message_topic == heartbeat_topic {
-        MessageType::Heartbeat
-    } else if let Some(pt) = policy_topic {
-        if message_topic == pt {
+        return MessageType::Heartbeat;
+    }
+    if let Some(pt) = policy_topic {
+        if topic_filter_matches(pt, message_topic) {
             return MessageType::Policy;
         }
-        if message_topic == event_topic {
-            MessageType::Event
-        } else if event_topic.contains('#') || event_topic.contains('+') {
-            MessageType::Event
-        } else {
-            MessageType::Ignored
-        }
-    } else if message_topic == event_topic {
-        MessageType::Event
-    } else if event_topic.contains('#') || event_topic.contains('+') {
-        MessageType::Event
-    } else {
-        MessageType::Ignored
     }
+    if message_topic == event_topic {
+        return MessageType::Event;
+    }
+    if event_topic.contains('#') || event_topic.contains('+') {
+        return MessageType::Event;
+    }
+    MessageType::Ignored
 }
 
 pub fn prepare_mqtt_event(config: &ILConfig, payload: &str, topic: &str) -> Option<EventQueueItemJson> {
@@ -363,6 +376,57 @@ mod tests {
         assert_eq!(
             classify_message("ilert/policies", "ilert/events", "ilert/heartbeats", None),
             MessageType::Ignored
+        );
+    }
+
+    #[test]
+    fn classify_policy_wildcard_hash() {
+        assert_eq!(
+            classify_message("ilert/policies/abc", "ilert/events", "ilert/heartbeats", Some("ilert/policies/#")),
+            MessageType::Policy
+        );
+    }
+
+    #[test]
+    fn classify_policy_wildcard_plus() {
+        assert_eq!(
+            classify_message("ilert/zone1/policies", "ilert/events", "ilert/heartbeats", Some("ilert/+/policies")),
+            MessageType::Policy
+        );
+    }
+
+    #[test]
+    fn classify_policy_wildcard_does_not_match_unrelated_topic() {
+        // proper MQTT filter matching: ilert/+/policies should NOT match events/foo
+        assert_eq!(
+            classify_message("events/foo", "events/foo", "ilert/heartbeats", Some("ilert/+/policies")),
+            MessageType::Event
+        );
+    }
+
+    #[test]
+    fn classify_policy_hash_matches_parent_level() {
+        // per MQTT spec, "ilert/#" matches "ilert"
+        assert_eq!(
+            classify_message("ilert", "ilert/events", "ilert/heartbeats", Some("ilert/#")),
+            MessageType::Policy
+        );
+    }
+
+    #[test]
+    fn classify_policy_plus_requires_exact_level_count() {
+        // "ilert/+" should NOT match "ilert/a/b" (+ is single-level)
+        assert_eq!(
+            classify_message("ilert/a/b", "ilert/a/b", "ilert/heartbeats", Some("ilert/+")),
+            MessageType::Event
+        );
+    }
+
+    #[test]
+    fn classify_heartbeat_takes_priority_over_policy_wildcard() {
+        assert_eq!(
+            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats", Some("#")),
+            MessageType::Heartbeat
         );
     }
 
