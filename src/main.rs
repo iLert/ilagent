@@ -403,7 +403,7 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
         }
 
         config = parse_consumer_arguments(matches, config);
-        consumers::mqtt::validate_mqtt_topics(&config);
+        consumers::mqtt::validate_mqtt_config(&config);
     }
 
     if let Some(kafka_brokers) = matches.get_one::<String>("kafka_brokers") {
@@ -615,7 +615,7 @@ async fn run_daemon(config: &ILConfig) {
     }
 
     // poll is only needed if mqtt or web server are running
-    let is_poll_needed = config.mqtt_host.is_some() || config.start_http;
+    let is_poll_needed = config.start_http || config.mqtt_buffer;
     let mut poll_job = None;
     if is_poll_needed {
         info!("Starting poll job..");
@@ -879,7 +879,8 @@ mod tests {
     }
 
     #[test]
-    fn daemon_config_mqtt_defaults_with_event_topic() {
+    #[should_panic(expected = "QoS 0 has no broker acknowledgement")]
+    fn daemon_config_mqtt_non_buffered_rejects_qos_zero() {
         let m = build_cli()
             .try_get_matches_from(vec![
                 "ilagent",
@@ -891,13 +892,51 @@ mod tests {
             ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m);
+    }
+
+    #[test]
+    fn daemon_config_mqtt_defaults_with_event_topic() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
         let config = build_daemon_config(sub, &m);
         assert_eq!(config.mqtt_host.unwrap(), "broker.local");
         assert_eq!(config.mqtt_port.unwrap(), 1883);
         assert_eq!(config.mqtt_name.unwrap(), "ilagent");
         assert_eq!(config.event_topic.unwrap(), "ilert/events");
         assert!(config.heartbeat_topic.is_none());
+        assert_eq!(config.mqtt_qos, 1);
         assert!(!config.mqtt_tls);
+    }
+
+    #[test]
+    fn daemon_config_mqtt_buffer_allows_qos_zero() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_buffer",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert!(config.mqtt_buffer);
+        assert_eq!(config.mqtt_qos, 0);
     }
 
     #[test]
@@ -921,6 +960,8 @@ mod tests {
                 "custom/events",
                 "-r",
                 "custom/heartbeats",
+                "--mqtt_qos",
+                "1",
             ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
@@ -945,6 +986,8 @@ mod tests {
                 "--mqtt_tls",
                 "-e",
                 "ilert/events",
+                "--mqtt_qos",
+                "1",
                 "--mqtt_ca",
                 "/certs/ca.pem",
                 "--mqtt_client_cert",
@@ -1012,6 +1055,8 @@ mod tests {
                 "broker.local",
                 "-e",
                 "ilert/events",
+                "--mqtt_qos",
+                "1",
                 "--event_key",
                 "static-key",
                 "--map_key_etype",
@@ -1073,6 +1118,8 @@ mod tests {
                 "mqtt.example.com",
                 "-e",
                 "ilert/events",
+                "--mqtt_qos",
+                "1",
             ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
@@ -1101,6 +1148,8 @@ mod tests {
                 "broker.local",
                 "--policy_topic",
                 "ilert/policies",
+                "--mqtt_qos",
+                "1",
                 "--policy_routing_keys",
                 "location,slot",
                 "--filter_key",

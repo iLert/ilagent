@@ -3,7 +3,10 @@ use crate::db::ILDatabase;
 use crate::models::event::EventQueueItemJson;
 use crate::{DaemonContext, hbt};
 use log::{error, info, warn};
-use rumqttc::{Client, Event, Incoming, MqttOptions, QoS, TlsConfiguration, Transport};
+use rumqttc::{
+    Client, Event, Incoming, MqttOptions, Publish, QoS, RecvTimeoutError, TlsConfiguration,
+    Transport,
+};
 use rustls::RootCertStore;
 use serde_json::json;
 use std::collections::hash_map::DefaultHasher;
@@ -108,6 +111,15 @@ pub fn validate_mqtt_topics(config: &ILConfig) {
     if config.mqtt_host.is_some() && !has_configured_mqtt_topics(config) {
         panic!(
             "At least one MQTT topic must be configured: --event_topic, --heartbeat_topic, or --policy_topic"
+        );
+    }
+}
+
+pub fn validate_mqtt_config(config: &ILConfig) {
+    validate_mqtt_topics(config);
+    if config.mqtt_host.is_some() && !config.mqtt_buffer && config.mqtt_qos == 0 {
+        panic!(
+            "MQTT non-buffered mode requires --mqtt_qos 1 or --mqtt_qos 2 because QoS 0 has no broker acknowledgement to delay when ilert delivery fails. Use --mqtt_buffer if you need to accept QoS 0 messages."
         );
     }
 }
@@ -233,7 +245,7 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         .clone()
         .expect("Missing mqtt name");
 
-    validate_mqtt_topics(&daemon_ctx.config);
+    validate_mqtt_config(&daemon_ctx.config);
     let event_topic = daemon_ctx.config.event_topic.clone();
     let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone();
     let policy_topic = daemon_ctx.config.policy_topic.clone();
@@ -283,7 +295,8 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         mqtt_options
             .set_keep_alive(Duration::from_secs(5))
             .set_pending_throttle(Duration::from_secs(1))
-            .set_clean_session(false);
+            .set_clean_session(false)
+            .set_manual_acks(true);
 
         if let Some(mqtt_username) = daemon_ctx.config.mqtt_username.clone() {
             mqtt_options.set_credentials(
@@ -374,7 +387,7 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         let tls_check_interval = Duration::from_secs(30);
 
         info!("Connecting to Mqtt server..");
-        for (_i, invoke) in connection.iter().enumerate() {
+        loop {
             if !daemon_ctx.running.load(Ordering::Relaxed) {
                 break;
             }
@@ -414,12 +427,18 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 }
             }
 
-            match invoke {
+            let invoke = match connection.recv_timeout(Duration::from_millis(250)) {
+                Ok(invoke) => invoke,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            };
+
+            let event = match invoke {
+                Ok(event) => event,
                 Err(e) => {
                     error!("mqtt error {:?}", e);
                     break;
                 }
-                _ => (),
             };
 
             if !connected {
@@ -434,7 +453,6 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 );
             }
 
-            let event: Event = invoke.unwrap();
             match event {
                 Event::Incoming(Incoming::Publish(message)) => {
                     recon_attempts = 0;
@@ -442,26 +460,45 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     let payload = str::from_utf8(&message.payload);
                     if payload.is_err() {
                         error!("Failed to decode mqtt payload {:?}", payload);
+                        acknowledge_mqtt_publish(&client, &message);
                         continue;
                     }
                     let payload = payload.expect("payload from utf8");
 
                     info!("Received mqtt message {}", message.topic);
-                    match classify_configured_message(
+                    let should_retry = match classify_configured_message(
                         &message.topic,
                         event_topic.as_deref(),
                         heartbeat_topic.as_deref(),
                         policy_topic.as_deref(),
                     ) {
-                        MessageType::Heartbeat => handle_heartbeat_message(&daemon_ctx, payload),
+                        MessageType::Heartbeat => process_heartbeat_message(&daemon_ctx, payload),
                         MessageType::Event => {
-                            handle_event_message(&daemon_ctx.config, &db, payload, &message.topic)
+                            process_event_message(&daemon_ctx, &db, payload, &message.topic)
                         }
                         MessageType::Policy => {
-                            handle_policy_message(&daemon_ctx, &db, payload, &message.topic)
+                            process_policy_message(&daemon_ctx, &db, payload, &message.topic)
                         }
-                        MessageType::Ignored => (),
+                        MessageType::Ignored => false,
+                    };
+
+                    if should_retry {
+                        if message.qos == QoS::AtMostOnce {
+                            warn!(
+                                "MQTT message from topic {} failed but cannot be retried with QoS 0",
+                                message.topic
+                            );
+                            continue;
+                        }
+                        warn!(
+                            "MQTT message from topic {} failed, reconnecting without acknowledgement",
+                            message.topic
+                        );
+                        let _ = client.disconnect();
+                        break;
                     }
+
+                    acknowledge_mqtt_publish(&client, &message);
                 }
                 _ => continue,
             }
@@ -486,53 +523,84 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
     }
 }
 
-fn handle_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) {
-    let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
-    if let Some(heartbeat) = parsed {
-        let ctx = daemon_ctx.clone();
-        let _ = tokio::spawn(async move {
-            if hbt::ping_heartbeat(&ctx.ilert_client, heartbeat.integrationKey.as_str()).await {
-                info!(
-                    "Heartbeat {} pinged, triggered by mqtt message",
-                    heartbeat.integrationKey.as_str()
-                );
-            }
-        });
+fn acknowledge_mqtt_publish(client: &Client, message: &Publish) {
+    if let Err(e) = client.ack(message) {
+        error!("Failed to acknowledge MQTT message {:?}", e);
     }
 }
 
-fn handle_policy_message(
+fn process_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) -> bool {
+    let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
+    if let Some(heartbeat) = parsed {
+        let ok = tokio::runtime::Handle::current().block_on(hbt::ping_heartbeat(
+            &daemon_ctx.ilert_client,
+            heartbeat.integrationKey.as_str(),
+        ));
+        if ok {
+            info!(
+                "Heartbeat {} pinged, triggered by mqtt message",
+                heartbeat.integrationKey.as_str()
+            );
+        }
+        return !ok;
+    }
+    false
+}
+
+fn process_policy_message(
     daemon_ctx: &Arc<DaemonContext>,
     db: &ILDatabase,
     payload: &str,
     topic: &str,
-) {
+) -> bool {
     if daemon_ctx.config.mqtt_buffer {
         match db.create_mqtt_queue_item(topic, payload) {
-            Ok(id) => info!("Policy message queued for retry processing: {}", id),
-            Err(e) => error!("Failed to queue policy message: {}", e),
+            Ok(id) => {
+                info!("Policy message queued for retry processing: {}", id);
+                false
+            }
+            Err(e) => {
+                error!("Failed to queue policy message: {}", e);
+                true
+            }
         }
     } else {
-        let ctx = daemon_ctx.clone();
-        let payload = payload.to_string();
-        let _ = tokio::spawn(async move {
-            let result =
-                super::policy::handle_policy_update(&ctx.ilert_client, &ctx.config, &payload).await;
-            if result {
-                warn!("Policy update failed and should be retried");
-            }
-        });
+        tokio::runtime::Handle::current().block_on(super::policy::handle_policy_update(
+            &daemon_ctx.ilert_client,
+            &daemon_ctx.config,
+            payload,
+        ))
     }
 }
 
-fn handle_event_message(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) -> () {
-    if config.mqtt_buffer {
+fn process_event_message(
+    daemon_ctx: &Arc<DaemonContext>,
+    db: &ILDatabase,
+    payload: &str,
+    topic: &str,
+) -> bool {
+    if daemon_ctx.config.mqtt_buffer {
         match db.create_mqtt_queue_item(topic, payload) {
-            Ok(id) => info!("Event message queued for retry processing: {}", id),
-            Err(e) => error!("Failed to queue event message: {}", e),
+            Ok(id) => {
+                info!("Event message queued for retry processing: {}", id);
+                false
+            }
+            Err(e) => {
+                error!("Failed to queue event message: {}", e);
+                true
+            }
         }
     } else {
-        enqueue_event(config, db, payload, topic);
+        if let Some(event) = prepare_mqtt_event(&daemon_ctx.config, payload, topic) {
+            let event_api_path = build_event_api_path(&event.integrationKey);
+            let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
+            tokio::runtime::Handle::current().block_on(crate::poll::send_queued_event(
+                &daemon_ctx.ilert_client,
+                &db_event,
+            ))
+        } else {
+            false
+        }
     }
 }
 
