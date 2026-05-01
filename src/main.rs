@@ -424,6 +424,15 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
         }
 
         config = parse_consumer_arguments(matches, config);
+
+        if config.event_topic.is_none()
+            && config.heartbeat_topic.is_none()
+            && config.policy_topic.is_none()
+        {
+            panic!(
+                "At least one Kafka topic must be configured: --event_topic, --heartbeat_topic, or --policy_topic"
+            );
+        }
     }
 
     if let Some(file) = global_matches.get_one::<String>("file") {
@@ -1050,6 +1059,8 @@ mod tests {
                 "daemon",
                 "--kafka_brokers",
                 "localhost:9092",
+                "-e",
+                "kafka/events",
             ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
@@ -1057,6 +1068,21 @@ mod tests {
         assert_eq!(config.kafka_brokers.unwrap(), "localhost:9092");
         assert_eq!(config.kafka_group_id.unwrap(), "ilagent");
         assert!(!config.start_http, "kafka should not force http on");
+    }
+
+    #[test]
+    #[should_panic(expected = "At least one Kafka topic must be configured")]
+    fn daemon_config_kafka_requires_topic() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "--kafka_brokers",
+                "localhost:9092",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m);
     }
 
     #[test]
