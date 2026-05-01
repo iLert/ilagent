@@ -1,6 +1,6 @@
-use tempfile::NamedTempFile;
 use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
+use tempfile::NamedTempFile;
 
 fn temp_db() -> (ILDatabase, NamedTempFile) {
     let file = NamedTempFile::new().expect("failed to create temp file");
@@ -40,7 +40,12 @@ fn migrations_are_idempotent() {
 fn insert_and_read_event() {
     let (db, _f) = temp_db();
 
-    let event = EventQueueItem::new_with_required("key1", "ALERT", "Server down", Some("alert-1".to_string()));
+    let event = EventQueueItem::new_with_required(
+        "key1",
+        "ALERT",
+        "Server down",
+        Some("alert-1".to_string()),
+    );
     let inserted = db.create_il_event(&event).unwrap().unwrap();
 
     assert!(inserted.id.is_some());
@@ -50,7 +55,10 @@ fn insert_and_read_event() {
     assert_eq!(inserted.alert_key.unwrap(), "alert-1");
 
     // read back by id
-    let fetched = db.get_il_event(inserted.id.as_ref().unwrap()).unwrap().unwrap();
+    let fetched = db
+        .get_il_event(inserted.id.as_ref().unwrap())
+        .unwrap()
+        .unwrap();
     assert_eq!(fetched.integration_key, "key1");
     assert_eq!(fetched.summary, "Server down");
 }
@@ -136,7 +144,8 @@ fn delete_nonexistent_event_returns_zero() {
 fn insert_event_with_all_optional_fields() {
     let (db, _f) = temp_db();
 
-    let mut event = EventQueueItem::new_with_required("k1", "ALERT", "full event", Some("ak-1".to_string()));
+    let mut event =
+        EventQueueItem::new_with_required("k1", "ALERT", "full event", Some("ak-1".to_string()));
     event.priority = Some("HIGH".to_string());
     event.details = Some("<b>details</b>".to_string());
     event.images = Some(r#"[{"src":"http://img.png"}]"#.to_string());

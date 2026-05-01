@@ -1,9 +1,9 @@
-use ilert::ilert_builders::{EventImage, EventLink, ILertEventType};
-use log::{debug, error, warn};
-use serde_derive::{Deserialize, Serialize};
 use crate::config::ILConfig;
 use crate::json_util::get_nested_value;
 use crate::models::event_db::EventQueueItem;
+use ilert::ilert_builders::{EventImage, EventLink, ILertEventType};
+use log::{debug, error, warn};
+use serde_derive::{Deserialize, Serialize};
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -17,7 +17,7 @@ pub struct EventQueueItemJson {
     pub priority: Option<String>,
     pub images: Option<Vec<EventImage>>,
     pub links: Option<Vec<EventLink>>,
-    pub customDetails: Option<serde_json::Value>
+    pub customDetails: Option<serde_json::Value>,
 }
 
 /**
@@ -35,11 +35,10 @@ pub struct EventQueueTransitionItemJson {
     pub priority: Option<String>,
     pub images: Option<Vec<EventImage>>,
     pub links: Option<Vec<EventLink>>,
-    pub customDetails: Option<serde_json::Value>
+    pub customDetails: Option<serde_json::Value>,
 }
 
 impl EventQueueItemJson {
-
     pub fn from_transition(trans: EventQueueTransitionItemJson) -> EventQueueItemJson {
         EventQueueItemJson {
             integrationKey: trans.integrationKey.unwrap_or("".to_string()),
@@ -50,21 +49,20 @@ impl EventQueueItemJson {
             priority: trans.priority,
             images: trans.images,
             links: trans.links,
-            customDetails: trans.customDetails
+            customDetails: trans.customDetails,
         }
     }
 
     pub fn to_db(item: EventQueueItemJson, event_api_path: Option<String>) -> EventQueueItem {
-
         let images = match item.images {
             Some(v) => {
                 let serialised = serde_json::to_string(&v);
                 match serialised {
                     Ok(str) => Some(str),
-                    _ => None
+                    _ => None,
                 }
-            },
-            None => None
+            }
+            None => None,
         };
 
         let links = match item.links {
@@ -72,15 +70,15 @@ impl EventQueueItemJson {
                 let serialised = serde_json::to_string(&v);
                 match serialised {
                     Ok(str) => Some(str),
-                    _ => None
+                    _ => None,
                 }
-            },
-            None => None
+            }
+            None => None,
         };
 
         let custom_details = match item.customDetails {
             Some(val) => Some(val.to_string()),
-            None => None
+            None => None,
         };
 
         EventQueueItem {
@@ -95,43 +93,42 @@ impl EventQueueItemJson {
             images,
             links,
             custom_details,
-            event_api_path
+            event_api_path,
         }
     }
 
     pub fn from_db(item: EventQueueItem) -> EventQueueItemJson {
-
-        let images : Option<Vec<EventImage>> = match item.images {
+        let images: Option<Vec<EventImage>> = match item.images {
             Some(str) => {
                 let parsed = serde_json::from_str(str.as_str());
                 match parsed {
                     Ok(v) => Some(v),
-                    _ => None
+                    _ => None,
                 }
-            },
-            None => None
+            }
+            None => None,
         };
 
-        let links : Option<Vec<EventLink>> = match item.links {
+        let links: Option<Vec<EventLink>> = match item.links {
             Some(str) => {
                 let parsed = serde_json::from_str(str.as_str());
                 match parsed {
                     Ok(v) => Some(v),
-                    _ => None
+                    _ => None,
                 }
-            },
-            None => None
+            }
+            None => None,
         };
 
-        let custom_details : Option<serde_json::Value> = match item.custom_details {
+        let custom_details: Option<serde_json::Value> = match item.custom_details {
             Some(str) => {
                 let parsed = serde_json::from_str(str.as_str());
                 match parsed {
                     Ok(v) => Some(v),
-                    _ => None
+                    _ => None,
                 }
-            },
-            None => None
+            }
+            None => None,
         };
 
         EventQueueItemJson {
@@ -143,14 +140,17 @@ impl EventQueueItemJson {
             priority: item.priority,
             images,
             links,
-            customDetails: custom_details
+            customDetails: custom_details,
         }
     }
 
-    pub fn parse_event_json(config: &ILConfig, payload: &str, topic: &str) -> Option<EventQueueItemJson> {
-
+    pub fn parse_event_json(
+        config: &ILConfig,
+        payload: &str,
+        topic: &str,
+    ) -> Option<EventQueueItemJson> {
         // raw parse
-        let json : serde_json::Result<serde_json::Value> = serde_json::from_str(payload);
+        let json: serde_json::Result<serde_json::Value> = serde_json::from_str(payload);
         if json.is_err() {
             warn!("Invalid consumer event payload json {}", json.unwrap_err());
             return None;
@@ -158,9 +158,13 @@ impl EventQueueItemJson {
         let json = json.unwrap();
 
         // helper container with default fields (all optional)
-        let parsed: serde_json::Result<EventQueueTransitionItemJson> = serde_json::from_str(payload);
+        let parsed: serde_json::Result<EventQueueTransitionItemJson> =
+            serde_json::from_str(payload);
         if parsed.is_err() {
-            error!("Failed to parse event consumer payload {}", parsed.unwrap_err());
+            error!(
+                "Failed to parse event consumer payload {}",
+                parsed.unwrap_err()
+            );
             return None;
         }
         let mut parsed = parsed.unwrap();
@@ -179,12 +183,18 @@ impl EventQueueItemJson {
                     match val.as_str() {
                         Some(val_str) => {
                             if !filter_val.eq(val_str) {
-                                debug!("Dropping event because filter key value is not matching: {:?}", val_str);
+                                debug!(
+                                    "Dropping event because filter key value is not matching: {:?}",
+                                    val_str
+                                );
                                 return None;
                             }
-                        },
+                        }
                         None => {
-                            warn!("Dropping event because filter key value is not a string: {:?}", val);
+                            warn!(
+                                "Dropping event because filter key value is not a string: {:?}",
+                                val
+                            );
                             return None;
                         }
                     }
@@ -204,7 +214,10 @@ impl EventQueueItemJson {
             if let Some(val) = get_nested_value(&json, map_key_alert_key) {
                 match val.as_str() {
                     Some(s) => parsed.alertKey = Some(s.to_string()),
-                    None => warn!("map_key_alert_key '{}' matched a non-string value: {:?}", map_key_alert_key, val),
+                    None => warn!(
+                        "map_key_alert_key '{}' matched a non-string value: {:?}",
+                        map_key_alert_key, val
+                    ),
                 }
             }
         }
@@ -213,7 +226,10 @@ impl EventQueueItemJson {
             if let Some(val) = get_nested_value(&json, map_key_summary) {
                 match val.as_str() {
                     Some(s) => parsed.summary = Some(s.to_string()),
-                    None => warn!("map_key_summary '{}' matched a non-string value: {:?}", map_key_summary, val),
+                    None => warn!(
+                        "map_key_summary '{}' matched a non-string value: {:?}",
+                        map_key_summary, val
+                    ),
                 }
             }
         }
@@ -225,8 +241,11 @@ impl EventQueueItemJson {
                     Some(s) => {
                         event_type = s.to_string();
                         parsed.eventType = Some(event_type.clone());
-                    },
-                    None => warn!("map_key_etype '{}' matched a non-string value: {:?}", map_key_etype, val),
+                    }
+                    None => warn!(
+                        "map_key_etype '{}' matched a non-string value: {:?}",
+                        map_key_etype, val
+                    ),
                 }
             }
         }
@@ -251,8 +270,12 @@ impl EventQueueItemJson {
 
         // try to save empty summary on alert events
         if parsed.summary.is_none()
-            && parsed.eventType.clone().unwrap_or(ILertEventType::ALERT.as_str().to_string())
-            .eq(ILertEventType::ALERT.as_str()) {
+            && parsed
+                .eventType
+                .clone()
+                .unwrap_or(ILertEventType::ALERT.as_str().to_string())
+                .eq(ILertEventType::ALERT.as_str())
+        {
             parsed.summary = Some(format!("New alert from {}", topic).to_string());
         }
 

@@ -1,16 +1,16 @@
+use log::{error, info, warn};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use log::{info, warn, error};
 use std::time::{Duration, Instant};
 
-use ilert::ilert::ILert;
-use ilert::ilert_builders::{EventApiResource, ILertEventType, ILertPriority};
 use crate::DaemonContext;
-use crate::consumers::mqtt::{classify_message, MessageType};
+use crate::consumers::mqtt::{MessageType, classify_configured_message};
 use crate::models::event::EventQueueItemJson;
 use crate::models::event_db::EventQueueItem;
 use crate::models::mqtt_queue::MqttQueueItem;
+use ilert::ilert::ILert;
+use ilert::ilert_builders::{EventApiResource, ILertEventType, ILertPriority};
 
 const EVENT_POLL_MIN_MS: u64 = 500;
 const EVENT_POLL_MAX_MS: u64 = 5000;
@@ -18,7 +18,6 @@ const EVENT_POLL_RETRY_MAX_MS: u64 = 60000;
 const EVENT_POLL_BATCH_SIZE: i32 = 50;
 
 pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
-
     let mut interval_ms: u64 = EVENT_POLL_MAX_MS;
     let mut last_run = Instant::now();
     let mut retry_counts: HashMap<String, u32> = HashMap::new();
@@ -31,13 +30,18 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
             last_run = Instant::now();
         }
 
-        let items_result = daemon_ctx.db.lock().await.get_il_events(EVENT_POLL_BATCH_SIZE);
+        let items_result = daemon_ctx
+            .db
+            .lock()
+            .await
+            .get_il_events(EVENT_POLL_BATCH_SIZE);
         match items_result {
             Ok(items) => {
                 let count = items.len();
                 if count > 0 {
                     info!("Found {} queued events.", count);
-                    let had_failures = process_queued_events(daemon_ctx.clone(), items, &mut retry_counts).await;
+                    let had_failures =
+                        process_queued_events(daemon_ctx.clone(), items, &mut retry_counts).await;
                     if had_failures {
                         interval_ms = (interval_ms * 2).min(EVENT_POLL_RETRY_MAX_MS);
                         warn!("Event queue had failures, backing off to {}ms", interval_ms);
@@ -47,7 +51,7 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 } else {
                     interval_ms = EVENT_POLL_MAX_MS;
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to fetch queued events {}", e);
                 interval_ms = (interval_ms * 2).min(EVENT_POLL_RETRY_MAX_MS);
@@ -57,8 +61,11 @@ pub async fn run_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 }
 
 /// Returns true if any events failed and need retry.
-async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<EventQueueItem>, retry_counts: &mut HashMap<String, u32>) -> bool {
-
+async fn process_queued_events(
+    daemon_ctx: Arc<DaemonContext>,
+    events: Vec<EventQueueItem>,
+    retry_counts: &mut HashMap<String, u32>,
+) -> bool {
     let max_retries = daemon_ctx.config.max_retries;
     let mut had_failures = false;
     for event in events.iter() {
@@ -66,26 +73,45 @@ async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<Event
         let event_id = event.id.clone().unwrap_or("".to_string());
         if !should_retry {
             retry_counts.remove(&event_id);
-            let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
+            let del_result = daemon_ctx
+                .db
+                .lock()
+                .await
+                .delete_il_event(event_id.as_str());
             match del_result {
                 Ok(_) => info!("Removed event {} from queue", event_id),
-                _ => warn!("Failed to remove event {} from queue", event_id)
+                _ => warn!("Failed to remove event {} from queue", event_id),
             };
         } else {
             let count = retry_counts.entry(event_id.clone()).or_insert(0);
             *count += 1;
 
             if max_retries > 0 && *count >= max_retries {
-                error!("Event {} exceeded max retries ({}), dropping", event_id, max_retries);
+                error!(
+                    "Event {} exceeded max retries ({}), dropping",
+                    event_id, max_retries
+                );
                 retry_counts.remove(&event_id);
-                let del_result = daemon_ctx.db.lock().await.delete_il_event(event_id.as_str());
+                let del_result = daemon_ctx
+                    .db
+                    .lock()
+                    .await
+                    .delete_il_event(event_id.as_str());
                 match del_result {
                     Ok(_) => info!("Removed event {} from queue after max retries", event_id),
-                    _ => warn!("Failed to remove event {} from queue", event_id)
+                    _ => warn!("Failed to remove event {} from queue", event_id),
                 };
             } else {
-                warn!("Failed to process event {} will retry ({}/{})", event_id, count,
-                    if max_retries == 0 { "unlimited".to_string() } else { max_retries.to_string() });
+                warn!(
+                    "Failed to process event {} will retry ({}/{})",
+                    event_id,
+                    count,
+                    if max_retries == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        max_retries.to_string()
+                    }
+                );
                 had_failures = true;
             }
         }
@@ -95,7 +121,6 @@ async fn process_queued_events(daemon_ctx: Arc<DaemonContext>, events: Vec<Event
 }
 
 pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> bool {
-
     let parsed_event = EventQueueItemJson::from_db(event.clone());
 
     let event_id = event.id.clone().unwrap_or("no_id".to_string());
@@ -103,23 +128,29 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
     let event_type = match event_type {
         Ok(et) => et,
         _ => {
-            error!("Failed to parse event {} with type {}", event_id, event.event_type);
-            return false // broken event type, drop this event
+            error!(
+                "Failed to parse event {} with type {}",
+                event_id, event.event_type
+            );
+            return false; // broken event type, drop this event
         }
     };
 
-    let priority : Option<ILertPriority> = match event.clone().priority {
+    let priority: Option<ILertPriority> = match event.clone().priority {
         Some(prio_str) => {
             let parsed = ILertPriority::from_str(prio_str.as_str());
             match parsed {
                 Ok(val) => Some(val),
                 _ => {
-                    error!("Failed to parse event {} with priority {}", event_id, prio_str);
-                    return false // broken event priority, drop this event
+                    error!(
+                        "Failed to parse event {} with priority {}",
+                        event_id, prio_str
+                    );
+                    return false; // broken event priority, drop this event
                 }
             }
-        },
-        None => None
+        }
+        None => None,
     };
 
     let mut post_request = ilert_client.create();
@@ -144,7 +175,7 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
             None,
             None,
             None,
-            None
+            None,
         )
         .execute()
         .await;
@@ -153,7 +184,7 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
         Ok(res) => res,
         _ => {
             error!("Network error during event post {}", event_id);
-            return true // network error, retry
+            return true; // network error, retry
         }
     };
 
@@ -161,7 +192,10 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
 
     if status == 202 {
         let correlation_id = response.headers.get("correlation-id");
-        info!("Event id: {}, correlation-id: {:?} successfully delivered", event_id, correlation_id);
+        info!(
+            "Event id: {}, correlation-id: {:?} successfully delivered",
+            event_id, correlation_id
+        );
         return false; // default happy case, no retry
     }
 
@@ -171,7 +205,10 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
     }
 
     if status == 404 {
-        warn!("Event {} failed with bad URL {}, potentially due to bad api key value", event_id, response.url);
+        warn!(
+            "Event {} failed with bad URL {}, potentially due to bad api key value",
+            event_id, response.url
+        );
         return false; // no point in retrying
     }
 
@@ -181,7 +218,10 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
     }
 
     warn!("Event {} failed bad request rejection {}", event_id, status);
-    error!("Response body: {}", response.body_raw.unwrap_or("No body provided".to_string()));
+    error!(
+        "Response body: {}",
+        response.body_raw.unwrap_or("No body provided".to_string())
+    );
     false // any other status code e.g. 400, no retry
 }
 
@@ -191,7 +231,6 @@ const MQTT_POLL_RETRY_MAX_MS: u64 = 60000;
 const MQTT_POLL_BATCH_SIZE: i32 = 50;
 
 pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
-
     let mut interval_ms: u64 = MQTT_POLL_MAX_MS;
     let mut last_run = Instant::now();
     let mut retry_counts: HashMap<String, u32> = HashMap::new();
@@ -204,13 +243,18 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
             last_run = Instant::now();
         }
 
-        let items_result = daemon_ctx.db.lock().await.get_mqtt_queue_items(MQTT_POLL_BATCH_SIZE);
+        let items_result = daemon_ctx
+            .db
+            .lock()
+            .await
+            .get_mqtt_queue_items(MQTT_POLL_BATCH_SIZE);
         match items_result {
             Ok(items) => {
                 let count = items.len();
                 if count > 0 {
                     info!("Found {} queued mqtt messages.", count);
-                    let had_failures = process_mqtt_queue(daemon_ctx.clone(), items, &mut retry_counts).await;
+                    let had_failures =
+                        process_mqtt_queue(daemon_ctx.clone(), items, &mut retry_counts).await;
                     if had_failures {
                         // back off exponentially on failures, cap at 60s
                         interval_ms = (interval_ms * 2).min(MQTT_POLL_RETRY_MAX_MS);
@@ -223,7 +267,7 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     // nothing to do, back off to idle interval
                     interval_ms = MQTT_POLL_MAX_MS;
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to fetch queued mqtt messages {}", e);
                 interval_ms = (interval_ms * 2).min(MQTT_POLL_RETRY_MAX_MS);
@@ -233,10 +277,11 @@ pub async fn run_mqtt_poll_job(daemon_ctx: Arc<DaemonContext>) -> () {
 }
 
 /// Returns true if any items failed and need retry.
-async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueueItem>, retry_counts: &mut HashMap<String, u32>) -> bool {
-
-    let event_topic = daemon_ctx.config.event_topic.clone().unwrap_or_default();
-    let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().unwrap_or_default();
+async fn process_mqtt_queue(
+    daemon_ctx: Arc<DaemonContext>,
+    items: Vec<MqttQueueItem>,
+    retry_counts: &mut HashMap<String, u32>,
+) -> bool {
     let policy_topic = daemon_ctx.config.policy_topic.clone();
     let max_retries = daemon_ctx.config.max_retries;
     let mut had_failures = false;
@@ -244,19 +289,35 @@ async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueue
     for item in items.iter() {
         let item_id = item.id.clone().unwrap_or_default();
 
-        let should_retry = match classify_message(&item.topic, &event_topic, &heartbeat_topic, policy_topic.as_deref()) {
+        let should_retry = match classify_configured_message(
+            &item.topic,
+            daemon_ctx.config.event_topic.as_deref(),
+            daemon_ctx.config.heartbeat_topic.as_deref(),
+            policy_topic.as_deref(),
+        ) {
             MessageType::Policy => {
                 crate::consumers::policy::handle_policy_update(
-                    &daemon_ctx.ilert_client, &daemon_ctx.config, &item.payload
-                ).await
-            },
+                    &daemon_ctx.ilert_client,
+                    &daemon_ctx.config,
+                    &item.payload,
+                )
+                .await
+            }
             MessageType::Event => {
                 let db = daemon_ctx.db.lock().await;
-                crate::consumers::mqtt::enqueue_event(&daemon_ctx.config, &db, &item.payload, &item.topic);
+                crate::consumers::mqtt::enqueue_event(
+                    &daemon_ctx.config,
+                    &db,
+                    &item.payload,
+                    &item.topic,
+                );
                 false
-            },
+            }
             other => {
-                warn!("Unexpected message type {:?} in mqtt queue for topic '{}', dropping", other, item.topic);
+                warn!(
+                    "Unexpected message type {:?} in mqtt queue for topic '{}', dropping",
+                    other, item.topic
+                );
                 false
             }
         };
@@ -266,23 +327,37 @@ async fn process_mqtt_queue(daemon_ctx: Arc<DaemonContext>, items: Vec<MqttQueue
             let del_result = daemon_ctx.db.lock().await.delete_mqtt_queue_item(&item_id);
             match del_result {
                 Ok(_) => info!("Removed mqtt queue item {} from queue", item_id),
-                _ => warn!("Failed to remove mqtt queue item {} from queue", item_id)
+                _ => warn!("Failed to remove mqtt queue item {} from queue", item_id),
             };
         } else {
             let count = retry_counts.entry(item_id.clone()).or_insert(0);
             *count += 1;
 
             if max_retries > 0 && *count >= max_retries {
-                error!("MQTT queue item {} exceeded max retries ({}), dropping", item_id, max_retries);
+                error!(
+                    "MQTT queue item {} exceeded max retries ({}), dropping",
+                    item_id, max_retries
+                );
                 retry_counts.remove(&item_id);
                 let del_result = daemon_ctx.db.lock().await.delete_mqtt_queue_item(&item_id);
                 match del_result {
-                    Ok(_) => info!("Removed mqtt queue item {} from queue after max retries", item_id),
-                    _ => warn!("Failed to remove mqtt queue item {} from queue", item_id)
+                    Ok(_) => info!(
+                        "Removed mqtt queue item {} from queue after max retries",
+                        item_id
+                    ),
+                    _ => warn!("Failed to remove mqtt queue item {} from queue", item_id),
                 };
             } else {
-                warn!("Failed to process mqtt queue item {} will retry ({}/{})", item_id, count,
-                    if max_retries == 0 { "unlimited".to_string() } else { max_retries.to_string() });
+                warn!(
+                    "Failed to process mqtt queue item {} will retry ({}/{})",
+                    item_id,
+                    count,
+                    if max_retries == 0 {
+                        "unlimited".to_string()
+                    } else {
+                        max_retries.to_string()
+                    }
+                );
                 had_failures = true;
             }
         }

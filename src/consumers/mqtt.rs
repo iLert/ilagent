@@ -1,17 +1,17 @@
-use log::{info, error, warn};
-use std::time::Duration;
+use crate::config::ILConfig;
+use crate::db::ILDatabase;
+use crate::models::event::EventQueueItemJson;
+use crate::{DaemonContext, hbt};
+use log::{error, info, warn};
+use rumqttc::{Client, Event, Incoming, MqttOptions, QoS, TlsConfiguration, Transport};
+use rustls::RootCertStore;
+use serde_json::json;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use rumqttc::{MqttOptions, Client, QoS, Incoming, Event, Transport, TlsConfiguration};
-use std::{str, thread};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use rustls::RootCertStore;
-use crate::db::ILDatabase;
-use crate::config::ILConfig;
-use crate::{hbt, DaemonContext};
-use crate::models::event::EventQueueItemJson;
-use serde_json::json;
+use std::time::Duration;
+use std::{str, thread};
 
 #[derive(Debug, PartialEq)]
 pub enum MessageType {
@@ -39,25 +39,84 @@ fn topic_filter_matches(filter: &str, topic: &str) -> bool {
     filter_parts.len() == topic_parts.len()
 }
 
-pub fn classify_message(message_topic: &str, event_topic: &str, heartbeat_topic: &str, policy_topic: Option<&str>) -> MessageType {
-    if message_topic == heartbeat_topic {
-        return MessageType::Heartbeat;
+pub(crate) fn classify_configured_message(
+    message_topic: &str,
+    event_topic: Option<&str>,
+    heartbeat_topic: Option<&str>,
+    policy_topic: Option<&str>,
+) -> MessageType {
+    if let Some(ht) = heartbeat_topic {
+        if message_topic == ht {
+            return MessageType::Heartbeat;
+        }
     }
     if let Some(pt) = policy_topic {
         if topic_filter_matches(pt, message_topic) {
             return MessageType::Policy;
         }
     }
-    if message_topic == event_topic {
-        return MessageType::Event;
-    }
-    if event_topic.contains('#') || event_topic.contains('+') {
-        return MessageType::Event;
+    if let Some(et) = event_topic {
+        if message_topic == et {
+            return MessageType::Event;
+        }
+        if et.contains('#') || et.contains('+') {
+            return MessageType::Event;
+        }
     }
     MessageType::Ignored
 }
 
-pub fn prepare_mqtt_event(config: &ILConfig, payload: &str, topic: &str) -> Option<EventQueueItemJson> {
+pub fn classify_message(
+    message_topic: &str,
+    event_topic: &str,
+    heartbeat_topic: &str,
+    policy_topic: Option<&str>,
+) -> MessageType {
+    classify_configured_message(
+        message_topic,
+        Some(event_topic),
+        Some(heartbeat_topic),
+        policy_topic,
+    )
+}
+
+fn configured_mqtt_topics(config: &ILConfig) -> Vec<&str> {
+    let mut topics = Vec::new();
+    if let Some(topic) = config.event_topic.as_deref() {
+        topics.push(topic);
+    }
+    if let Some(topic) = config.heartbeat_topic.as_deref() {
+        topics.push(topic);
+    }
+    if let Some(topic) = config.policy_topic.as_deref() {
+        topics.push(topic);
+    }
+    topics
+}
+
+fn describe_mqtt_topics(config: &ILConfig) -> String {
+    configured_mqtt_topics(config).join(", ")
+}
+
+fn has_configured_mqtt_topics(config: &ILConfig) -> bool {
+    config.event_topic.is_some()
+        || config.heartbeat_topic.is_some()
+        || config.policy_topic.is_some()
+}
+
+pub fn validate_mqtt_topics(config: &ILConfig) {
+    if config.mqtt_host.is_some() && !has_configured_mqtt_topics(config) {
+        panic!(
+            "At least one MQTT topic must be configured: --event_topic, --heartbeat_topic, or --policy_topic"
+        );
+    }
+}
+
+pub fn prepare_mqtt_event(
+    config: &ILConfig,
+    payload: &str,
+    topic: &str,
+) -> Option<EventQueueItemJson> {
     super::prepare_consumer_event(config, payload, topic, json!({"topic": topic}))
 }
 
@@ -81,12 +140,17 @@ impl TlsMaterial {
 
         let client_auth = match (&config.mqtt_client_cert_path, &config.mqtt_client_key_path) {
             (Some(cert_path), Some(key_path)) => {
-                let cert = std::fs::read(cert_path)
-                    .map_err(|e| format!("Failed to read MQTT client certificate file {}: {}", cert_path, e))?;
-                let key = std::fs::read(key_path)
-                    .map_err(|e| format!("Failed to read MQTT client key file {}: {}", key_path, e))?;
+                let cert = std::fs::read(cert_path).map_err(|e| {
+                    format!(
+                        "Failed to read MQTT client certificate file {}: {}",
+                        cert_path, e
+                    )
+                })?;
+                let key = std::fs::read(key_path).map_err(|e| {
+                    format!("Failed to read MQTT client key file {}: {}", key_path, e)
+                })?;
                 Some((cert, key))
-            },
+            }
             _ => None,
         };
 
@@ -97,7 +161,11 @@ impl TlsMaterial {
             key.hash(&mut hasher);
         }
 
-        Ok(Some(TlsMaterial { ca, client_auth, fingerprint: hasher.finish() }))
+        Ok(Some(TlsMaterial {
+            ca,
+            client_auth,
+            fingerprint: hasher.finish(),
+        }))
     }
 
     fn try_into_transport(self) -> Result<Transport, String> {
@@ -109,7 +177,8 @@ impl TlsMaterial {
             return Err("CA certificate file contains no certificates".to_string());
         }
         for cert in &ca_certs {
-            root_store.add(cert.clone())
+            root_store
+                .add(cert.clone())
                 .map_err(|e| format!("Invalid CA certificate: {}", e))?;
         }
 
@@ -129,29 +198,44 @@ impl TlsMaterial {
             let key = rustls_pemfile::private_key(&mut &key_bytes[..])
                 .map_err(|e| format!("Failed to parse client key PEM: {}", e))?
                 .ok_or_else(|| "Client key file contains no private key".to_string())?;
-            config_builder.with_client_auth_cert(certs, key)
+            config_builder
+                .with_client_auth_cert(certs, key)
                 .map_err(|e| format!("Client certificate and key are incompatible: {}", e))?
         } else {
             config_builder.with_no_client_auth()
         };
 
-        Ok(Transport::tls_with_config(TlsConfiguration::Rustls(Arc::new(client_config))))
+        Ok(Transport::tls_with_config(TlsConfiguration::Rustls(
+            Arc::new(client_config),
+        )))
     }
 }
 
 pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
-
     let mut connected = false;
     let mut recon_attempts: u32 = 0;
 
     let db = ILDatabase::new(daemon_ctx.config.db_file.as_str());
 
-    let mqtt_host = daemon_ctx.config.mqtt_host.clone().expect("Missing mqtt host");
-    let mqtt_port = daemon_ctx.config.mqtt_port.clone().expect("Missing mqtt port");
-    let mqtt_name = daemon_ctx.config.mqtt_name.clone().expect("Missing mqtt name");
+    let mqtt_host = daemon_ctx
+        .config
+        .mqtt_host
+        .clone()
+        .expect("Missing mqtt host");
+    let mqtt_port = daemon_ctx
+        .config
+        .mqtt_port
+        .clone()
+        .expect("Missing mqtt port");
+    let mqtt_name = daemon_ctx
+        .config
+        .mqtt_name
+        .clone()
+        .expect("Missing mqtt name");
 
-    let event_topic = daemon_ctx.config.event_topic.clone().expect("Missing mqtt event topic");
-    let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().expect("Missing mqtt heartbeat topic");
+    validate_mqtt_topics(&daemon_ctx.config);
+    let event_topic = daemon_ctx.config.event_topic.clone();
+    let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone();
     let policy_topic = daemon_ctx.config.policy_topic.clone();
 
     let qos = match daemon_ctx.config.mqtt_qos {
@@ -160,7 +244,10 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         _ => QoS::AtMostOnce,
     };
 
-    let shared_prefix = daemon_ctx.config.mqtt_shared_group.as_ref()
+    let shared_prefix = daemon_ctx
+        .config
+        .mqtt_shared_group
+        .as_ref()
         .map(|g| format!("$share/{}/", g));
 
     let sub_topic = |topic: &str| -> String {
@@ -177,25 +264,21 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         match TlsMaterial::try_load(&daemon_ctx.config) {
             Ok(Some(material)) => {
                 let fp = material.fingerprint;
-                let transport = material.try_into_transport()
+                let transport = material
+                    .try_into_transport()
                     .expect("Invalid TLS certificate material");
                 active_tls_fp = Some(fp);
                 staged_transport = Some((transport, fp));
-            },
+            }
             Ok(None) => {
                 warn!("No CA certificate provided, using system default certificates");
-            },
+            }
             Err(e) => panic!("{}", e),
         }
     }
 
     loop {
-
-        let mut mqtt_options = MqttOptions::new(
-            mqtt_name.as_str(),
-            mqtt_host.as_str(),
-            mqtt_port,
-        );
+        let mut mqtt_options = MqttOptions::new(mqtt_name.as_str(), mqtt_host.as_str(), mqtt_port);
 
         mqtt_options
             .set_keep_alive(Duration::from_secs(5))
@@ -203,9 +286,15 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
             .set_clean_session(false);
 
         if let Some(mqtt_username) = daemon_ctx.config.mqtt_username.clone() {
-            mqtt_options.set_credentials(mqtt_username.as_str(),
-                                         daemon_ctx.config.mqtt_password.clone()
-                                             .expect("mqtt_username is set, expecting mqtt_password to be set as well").as_str());
+            mqtt_options.set_credentials(
+                mqtt_username.as_str(),
+                daemon_ctx
+                    .config
+                    .mqtt_password
+                    .clone()
+                    .expect("mqtt_username is set, expecting mqtt_password to be set as well")
+                    .as_str(),
+            );
         }
 
         let mut attempt_tls_fp: Option<u64> = None;
@@ -222,24 +311,26 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                             Ok(transport) => {
                                 attempt_tls_fp = Some(fp);
                                 transport
-                            },
+                            }
                             Err(e) => {
                                 error!("Failed to build TLS transport: {}", e);
-                                let delay_ms = std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
+                                let delay_ms =
+                                    std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
                                 recon_attempts += 1;
                                 thread::sleep(Duration::from_millis(delay_ms));
                                 continue;
-                            },
+                            }
                         }
-                    },
+                    }
                     Ok(None) => Transport::tls_with_default_config(),
                     Err(e) => {
                         error!("Failed to load TLS certificates for reconnect: {}", e);
-                        let delay_ms = std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
+                        let delay_ms =
+                            std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
                         recon_attempts += 1;
                         thread::sleep(Duration::from_millis(delay_ms));
                         continue;
-                    },
+                    }
                 }
             } else {
                 Transport::tls_with_default_config()
@@ -250,21 +341,33 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
         let (client, mut connection) = Client::new(mqtt_options, 10);
 
-        client.subscribe(sub_topic(&event_topic).as_str(), qos)
-            .expect("Failed to subscribe to mqtt event topic");
-
-        client.subscribe(sub_topic(&heartbeat_topic).as_str(), qos)
-            .expect("Failed to subscribe to mqtt heartbeat topic");
-
-        if let Some(ref pt) = policy_topic {
-            client.subscribe(sub_topic(pt).as_str(), qos)
-                .expect("Failed to subscribe to mqtt policy topic");
-            info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos,
-                shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
-        } else {
-            info!("Subscribing to mqtt topics {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), qos,
-                shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
+        if let Some(ref topic) = event_topic {
+            client
+                .subscribe(sub_topic(topic).as_str(), qos)
+                .expect("Failed to subscribe to mqtt event topic");
         }
+
+        if let Some(ref topic) = heartbeat_topic {
+            client
+                .subscribe(sub_topic(topic).as_str(), qos)
+                .expect("Failed to subscribe to mqtt heartbeat topic");
+        }
+
+        if let Some(ref topic) = policy_topic {
+            client
+                .subscribe(sub_topic(topic).as_str(), qos)
+                .expect("Failed to subscribe to mqtt policy topic");
+        }
+
+        info!(
+            "Subscribing to mqtt topics {} (QoS {:?}{})",
+            describe_mqtt_topics(&daemon_ctx.config),
+            qos,
+            shared_prefix
+                .as_ref()
+                .map(|p| format!(", shared: {}", p))
+                .unwrap_or_default()
+        );
 
         let mut tls_reload_requested = false;
         let mut last_tls_check = std::time::Instant::now();
@@ -272,7 +375,6 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
         info!("Connecting to Mqtt server..");
         for (_i, invoke) in connection.iter().enumerate() {
-
             if !daemon_ctx.running.load(Ordering::Relaxed) {
                 break;
             }
@@ -285,22 +387,30 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                             let fp = material.fingerprint;
                             match material.try_into_transport() {
                                 Ok(transport) => {
-                                    info!("TLS certificate change detected, reconnecting with new certificates..");
+                                    info!(
+                                        "TLS certificate change detected, reconnecting with new certificates.."
+                                    );
                                     staged_transport = Some((transport, fp));
                                     tls_reload_requested = true;
                                     let _ = client.disconnect();
                                     break;
-                                },
+                                }
                                 Err(e) => {
-                                    warn!("TLS certificates changed but are invalid, keeping current connection: {}", e);
-                                },
+                                    warn!(
+                                        "TLS certificates changed but are invalid, keeping current connection: {}",
+                                        e
+                                    );
+                                }
                             }
                         }
-                    },
-                    Ok(None) => {},
+                    }
+                    Ok(None) => {}
                     Err(e) => {
-                        warn!("Failed to read TLS certificates during reload check, keeping current connection: {}", e);
-                    },
+                        warn!(
+                            "Failed to read TLS certificates during reload check, keeping current connection: {}",
+                            e
+                        );
+                    }
                 }
             }
 
@@ -308,8 +418,8 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 Err(e) => {
                     error!("mqtt error {:?}", e);
                     break;
-                },
-                _ => ()
+                }
+                _ => (),
             };
 
             if !connected {
@@ -317,7 +427,11 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 if let Some(fp) = attempt_tls_fp {
                     active_tls_fp = Some(fp);
                 }
-                info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
+                info!(
+                    "Connected to mqtt server {}:{}",
+                    mqtt_host.as_str(),
+                    mqtt_port
+                );
             }
 
             let event: Event = invoke.unwrap();
@@ -333,14 +447,23 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     let payload = payload.expect("payload from utf8");
 
                     info!("Received mqtt message {}", message.topic);
-                    match classify_message(&message.topic, &event_topic, &heartbeat_topic, policy_topic.as_deref()) {
+                    match classify_configured_message(
+                        &message.topic,
+                        event_topic.as_deref(),
+                        heartbeat_topic.as_deref(),
+                        policy_topic.as_deref(),
+                    ) {
                         MessageType::Heartbeat => handle_heartbeat_message(&daemon_ctx, payload),
-                        MessageType::Event => handle_event_message(&daemon_ctx.config, &db, payload, &message.topic),
-                        MessageType::Policy => handle_policy_message(&daemon_ctx, &db, payload, &message.topic),
+                        MessageType::Event => {
+                            handle_event_message(&daemon_ctx.config, &db, payload, &message.topic)
+                        }
+                        MessageType::Policy => {
+                            handle_policy_message(&daemon_ctx, &db, payload, &message.topic)
+                        }
                         MessageType::Ignored => (),
                     }
-                },
-                _ => continue
+                }
+                _ => continue,
             }
         }
 
@@ -369,13 +492,21 @@ fn handle_heartbeat_message(daemon_ctx: &Arc<DaemonContext>, payload: &str) {
         let ctx = daemon_ctx.clone();
         let _ = tokio::spawn(async move {
             if hbt::ping_heartbeat(&ctx.ilert_client, heartbeat.integrationKey.as_str()).await {
-                info!("Heartbeat {} pinged, triggered by mqtt message", heartbeat.integrationKey.as_str());
+                info!(
+                    "Heartbeat {} pinged, triggered by mqtt message",
+                    heartbeat.integrationKey.as_str()
+                );
             }
         });
     }
 }
 
-fn handle_policy_message(daemon_ctx: &Arc<DaemonContext>, db: &ILDatabase, payload: &str, topic: &str) {
+fn handle_policy_message(
+    daemon_ctx: &Arc<DaemonContext>,
+    db: &ILDatabase,
+    payload: &str,
+    topic: &str,
+) {
     if daemon_ctx.config.mqtt_buffer {
         match db.create_mqtt_queue_item(topic, payload) {
             Ok(id) => info!("Policy message queued for retry processing: {}", id),
@@ -385,7 +516,8 @@ fn handle_policy_message(daemon_ctx: &Arc<DaemonContext>, db: &ILDatabase, paylo
         let ctx = daemon_ctx.clone();
         let payload = payload.to_string();
         let _ = tokio::spawn(async move {
-            let result = super::policy::handle_policy_update(&ctx.ilert_client, &ctx.config, &payload).await;
+            let result =
+                super::policy::handle_policy_update(&ctx.ilert_client, &ctx.config, &payload).await;
             if result {
                 warn!("Policy update failed and should be retried");
             }
@@ -413,8 +545,11 @@ pub fn enqueue_event(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &
             Ok(res) => match res {
                 Some(val) => {
                     let event_id = val.id.clone().unwrap_or("".to_string());
-                    info!("Event {} successfully created and added to queue.", event_id);
-                },
+                    info!(
+                        "Event {} successfully created and added to queue.",
+                        event_id
+                    );
+                }
                 None => {
                     error!("Failed to create event, result is empty");
                 }
@@ -468,7 +603,12 @@ mod tests {
     #[test]
     fn classify_wildcard_plus_matches_as_event() {
         assert_eq!(
-            classify_message("ilert/zone1/events", "ilert/+/events", "ilert/heartbeats", None),
+            classify_message(
+                "ilert/zone1/events",
+                "ilert/+/events",
+                "ilert/heartbeats",
+                None
+            ),
             MessageType::Event
         );
     }
@@ -486,7 +626,12 @@ mod tests {
     fn classify_wildcard_does_not_match_heartbeat_topic() {
         // heartbeat topic is checked first, so a non-heartbeat message with wildcard event topic is Event
         assert_eq!(
-            classify_message("some/random/topic", "devices/+/alerts", "ilert/heartbeats", None),
+            classify_message(
+                "some/random/topic",
+                "devices/+/alerts",
+                "ilert/heartbeats",
+                None
+            ),
             MessageType::Event
         );
     }
@@ -494,7 +639,12 @@ mod tests {
     #[test]
     fn classify_policy_topic() {
         assert_eq!(
-            classify_message("ilert/policies", "ilert/events", "ilert/heartbeats", Some("ilert/policies")),
+            classify_message(
+                "ilert/policies",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("ilert/policies")
+            ),
             MessageType::Policy
         );
     }
@@ -502,7 +652,12 @@ mod tests {
     #[test]
     fn classify_heartbeat_takes_priority_over_policy() {
         assert_eq!(
-            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats", Some("ilert/heartbeats")),
+            classify_message(
+                "ilert/heartbeats",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("ilert/heartbeats")
+            ),
             MessageType::Heartbeat
         );
     }
@@ -510,7 +665,12 @@ mod tests {
     #[test]
     fn classify_event_when_policy_configured_but_not_matching() {
         assert_eq!(
-            classify_message("ilert/events", "ilert/events", "ilert/heartbeats", Some("ilert/policies")),
+            classify_message(
+                "ilert/events",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("ilert/policies")
+            ),
             MessageType::Event
         );
     }
@@ -526,7 +686,12 @@ mod tests {
     #[test]
     fn classify_policy_wildcard_hash() {
         assert_eq!(
-            classify_message("ilert/policies/abc", "ilert/events", "ilert/heartbeats", Some("ilert/policies/#")),
+            classify_message(
+                "ilert/policies/abc",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("ilert/policies/#")
+            ),
             MessageType::Policy
         );
     }
@@ -534,7 +699,12 @@ mod tests {
     #[test]
     fn classify_policy_wildcard_plus() {
         assert_eq!(
-            classify_message("ilert/zone1/policies", "ilert/events", "ilert/heartbeats", Some("ilert/+/policies")),
+            classify_message(
+                "ilert/zone1/policies",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("ilert/+/policies")
+            ),
             MessageType::Policy
         );
     }
@@ -543,7 +713,12 @@ mod tests {
     fn classify_policy_wildcard_does_not_match_unrelated_topic() {
         // proper MQTT filter matching: ilert/+/policies should NOT match events/foo
         assert_eq!(
-            classify_message("events/foo", "events/foo", "ilert/heartbeats", Some("ilert/+/policies")),
+            classify_message(
+                "events/foo",
+                "events/foo",
+                "ilert/heartbeats",
+                Some("ilert/+/policies")
+            ),
             MessageType::Event
         );
     }
@@ -561,7 +736,12 @@ mod tests {
     fn classify_policy_plus_requires_exact_level_count() {
         // "ilert/+" should NOT match "ilert/a/b" (+ is single-level)
         assert_eq!(
-            classify_message("ilert/a/b", "ilert/a/b", "ilert/heartbeats", Some("ilert/+")),
+            classify_message(
+                "ilert/a/b",
+                "ilert/a/b",
+                "ilert/heartbeats",
+                Some("ilert/+")
+            ),
             MessageType::Event
         );
     }
@@ -569,7 +749,12 @@ mod tests {
     #[test]
     fn classify_heartbeat_takes_priority_over_policy_wildcard() {
         assert_eq!(
-            classify_message("ilert/heartbeats", "ilert/events", "ilert/heartbeats", Some("#")),
+            classify_message(
+                "ilert/heartbeats",
+                "ilert/events",
+                "ilert/heartbeats",
+                Some("#")
+            ),
             MessageType::Heartbeat
         );
     }
@@ -619,7 +804,8 @@ mod tests {
         let mut config = ILConfig::new();
         config.filter_key = Some("type".to_string());
         config.filter_val = Some("ALARM".to_string());
-        let payload = r#"{"apiKey": "k1", "type": "INFO", "eventType": "ALERT", "summary": "test"}"#;
+        let payload =
+            r#"{"apiKey": "k1", "type": "INFO", "eventType": "ALERT", "summary": "test"}"#;
         let result = prepare_mqtt_event(&config, payload, "ilert/events");
         assert!(result.is_none());
     }
@@ -653,7 +839,10 @@ mod tests {
         let api_path = build_event_api_path(&event.integrationKey);
         let db_item = EventQueueItemJson::to_db(event, Some(api_path));
         assert_eq!(db_item.integration_key, "static-key");
-        assert_eq!(db_item.event_api_path.unwrap(), "/v1/events/mqtt/static-key");
+        assert_eq!(
+            db_item.event_api_path.unwrap(),
+            "/v1/events/mqtt/static-key"
+        );
         assert_eq!(db_item.event_type, "ALERT");
 
         // custom details should have topic injected
@@ -805,7 +994,11 @@ mod tests {
 
         let material = TlsMaterial::try_load(&config).unwrap().unwrap();
         match material.try_into_transport() {
-            Err(e) => assert!(e.contains("no certificates"), "expected 'no certificates' error, got: {}", e),
+            Err(e) => assert!(
+                e.contains("no certificates"),
+                "expected 'no certificates' error, got: {}",
+                e
+            ),
             Ok(_) => panic!("expected error for invalid CA PEM"),
         }
     }

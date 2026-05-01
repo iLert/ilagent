@@ -1,13 +1,13 @@
-use actix_web::{test, web, App};
-use tokio::sync::Mutex;
-use tempfile::NamedTempFile;
-use serde_json::json;
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path_regex};
+use actix_web::{App, test, web};
 use ilert::ilert::ILert;
+use serde_json::json;
+use tempfile::NamedTempFile;
+use tokio::sync::Mutex;
+use wiremock::matchers::{method, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ilagent::db::ILDatabase;
-use ilagent::http_server::{config_app, WebContextContainer};
+use ilagent::http_server::{WebContextContainer, config_app};
 use ilagent::models::event::EventQueueItemJson;
 use ilagent::poll::send_queued_event;
 
@@ -27,8 +27,7 @@ async fn e2e_post_event_poll_deliver_and_delete() {
 
     Mock::given(method("POST"))
         .and(path_regex(".*"))
-        .respond_with(ResponseTemplate::new(202)
-            .insert_header("correlation-id", "e2e-corr-1"))
+        .respond_with(ResponseTemplate::new(202).insert_header("correlation-id", "e2e-corr-1"))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -40,8 +39,9 @@ async fn e2e_post_event_poll_deliver_and_delete() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "il1api123",
@@ -107,8 +107,9 @@ async fn e2e_post_event_rate_limited_stays_in_queue() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "k1",
@@ -128,7 +129,8 @@ async fn e2e_post_event_rate_limited_stays_in_queue() {
         c.db.get_il_events(1).unwrap()[0].clone()
     };
 
-    let ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     let should_retry = send_queued_event(&ilert_client, &event).await;
     assert!(should_retry, "429 should signal retry");
 
@@ -160,15 +162,17 @@ async fn e2e_mqtt_event_uses_custom_path() {
     let json_event = EventQueueItemJson::parse_event_json(
         &config,
         r#"{"apiKey": "mqttkey1", "eventType": "ALERT", "summary": "MQTT alert"}"#,
-        "factory/sensors"
-    ).unwrap();
+        "factory/sensors",
+    )
+    .unwrap();
 
     let api_path = format!("/v1/events/mqtt/{}", json_event.integrationKey);
     let db_event = EventQueueItemJson::to_db(json_event, Some(api_path));
     let inserted = db.create_il_event(&db_event).unwrap().unwrap();
 
     // poll sends it
-    let ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     let should_retry = send_queued_event(&ilert_client, &inserted).await;
     assert!(!should_retry);
 }
@@ -192,8 +196,9 @@ async fn e2e_fifo_delivery_order() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     // insert 3 events in order
     for i in 0..3 {

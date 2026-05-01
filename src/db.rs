@@ -1,12 +1,12 @@
+use chrono::prelude::*;
+use log::{error, info};
 use rusqlite::types::ToSql;
 use rusqlite::{Connection, Row};
-use log::{info, error};
-use chrono::prelude::*;
 use uuid::Uuid;
 
-use ilert::ilert_builders::{ILertEventType};
 use crate::models::event_db::EventQueueItem;
 use crate::models::mqtt_queue::MqttQueueItem;
+use ilert::ilert_builders::ILertEventType;
 
 const DB_MIGRATION_VAL: &str = "1";
 const DB_MIGRATION_V1: &str = "mig_1";
@@ -23,12 +23,11 @@ struct ILAgentItem {
 }
 
 impl ILAgentItem {
-
     pub fn new(key: &str, val: &str) -> ILAgentItem {
         ILAgentItem {
             key: key.to_string(),
             val: val.to_string(),
-            created_at: None
+            created_at: None,
         }
     }
 }
@@ -38,7 +37,6 @@ pub struct ILDatabase {
 }
 
 impl ILDatabase {
-
     pub fn new(path: &str) -> ILDatabase {
         info!("SQLite Version: {}", rusqlite::version());
         let conn = Connection::open(path).expect("Failed to setup SQLite connection");
@@ -48,20 +46,22 @@ impl ILDatabase {
     pub fn prepare_database(&self) -> () {
         info!("Preparing database..");
 
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS ilagent (
+        self.conn
+            .execute(
+                "CREATE TABLE IF NOT EXISTS ilagent (
                       key                 TEXT PRIMARY KEY,
                       val                 TEXT NOT NULL,
                       created_at          TEXT NOT NULL
                   )",
-            [],
-        ).expect("Failed to bootstrap database");
+                [],
+            )
+            .expect("Failed to bootstrap database");
 
         let mig_1 = self.get_il_value(DB_MIGRATION_V1);
         if mig_1.is_none() {
-
-            self.conn.execute(
-                "CREATE TABLE event_items (
+            self.conn
+                .execute(
+                    "CREATE TABLE event_items (
                       id                 TEXT PRIMARY KEY,
                       api_key            TEXT NOT NULL,
                       event_type         TEXT NOT NULL,
@@ -74,8 +74,9 @@ impl ILDatabase {
                       custom_details     TEXT NULL,
                       details            TEXT NULL
                   )",
-                [],
-            ).expect("Database migration failed (v1)");
+                    [],
+                )
+                .expect("Database migration failed (v1)");
 
             self.set_il_val(DB_MIGRATION_V1, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v1, set)");
@@ -84,11 +85,12 @@ impl ILDatabase {
 
         let mig_2 = self.get_il_value(DB_MIGRATION_V2);
         if mig_2.is_none() {
-
-            self.conn.execute(
-                "ALTER TABLE event_items RENAME COLUMN incident_key TO alert_key",
-                [],
-            ).expect("Database migration failed (v2, 1)");
+            self.conn
+                .execute(
+                    "ALTER TABLE event_items RENAME COLUMN incident_key TO alert_key",
+                    [],
+                )
+                .expect("Database migration failed (v2, 1)");
 
             self.conn.execute(
                 "ALTER TABLE event_items ADD COLUMN inserted_at DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))",
@@ -102,11 +104,12 @@ impl ILDatabase {
 
         let mig_3 = self.get_il_value(DB_MIGRATION_V3);
         if mig_3.is_none() {
-
-            self.conn.execute(
-                "ALTER TABLE event_items ADD COLUMN event_api_path TEXT NULL",
-                [],
-            ).expect("Database migration failed (v3, 1)");
+            self.conn
+                .execute(
+                    "ALTER TABLE event_items ADD COLUMN event_api_path TEXT NULL",
+                    [],
+                )
+                .expect("Database migration failed (v3, 1)");
 
             self.set_il_val(DB_MIGRATION_V3, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v3, set)");
@@ -115,11 +118,12 @@ impl ILDatabase {
 
         let mig_4 = self.get_il_value(DB_MIGRATION_V4);
         if mig_4.is_none() {
-
-            self.conn.execute(
-                "ALTER TABLE event_items RENAME COLUMN api_key TO integration_key",
-                [],
-            ).expect("Database migration failed (v4, 1)");
+            self.conn
+                .execute(
+                    "ALTER TABLE event_items RENAME COLUMN api_key TO integration_key",
+                    [],
+                )
+                .expect("Database migration failed (v4, 1)");
 
             self.set_il_val(DB_MIGRATION_V4, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v4, set)");
@@ -128,16 +132,17 @@ impl ILDatabase {
 
         let mig_5 = self.get_il_value(DB_MIGRATION_V5);
         if mig_5.is_none() {
-
-            self.conn.execute(
-                "CREATE TABLE mqtt_queue (
+            self.conn
+                .execute(
+                    "CREATE TABLE mqtt_queue (
                       id                 TEXT PRIMARY KEY,
                       topic              TEXT NOT NULL,
                       payload            TEXT NOT NULL,
                       inserted_at        DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
                   )",
-                [],
-            ).expect("Database migration failed (v5)");
+                    [],
+                )
+                .expect("Database migration failed (v5)");
 
             self.set_il_val(DB_MIGRATION_V5, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v5, set)");
@@ -163,33 +168,34 @@ impl ILDatabase {
     }
 
     pub fn get_il_value(&self, key: &str) -> Option<String> {
-
-        let mut stmt = self.conn.prepare("SELECT * FROM ilagent WHERE key = ?1").unwrap();
-        let items = stmt
-            .query_map(&[&key], |row| Ok(ILAgentItem {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM ilagent WHERE key = ?1")
+            .unwrap();
+        let items = stmt.query_map(&[&key], |row| {
+            Ok(ILAgentItem {
                 key: row.get(0).unwrap_or("".to_string()),
                 val: row.get(1).unwrap_or("".to_string()),
-                created_at: row.get(2).unwrap_or(None)
-            }));
+                created_at: row.get(2).unwrap_or(None),
+            })
+        });
 
         match items {
             Err(e) => {
                 error!("Failed to get ilagent value: {}; {:?}.", key, e);
                 None
-            },
-            Ok(mut item_values) => {
-                match item_values.next() {
-                    None => None,
-                    Some(item) => match item {
-                        Ok(item_val) => Some(item_val.val),
-                        _ => None
-                    }
-                }
+            }
+            Ok(mut item_values) => match item_values.next() {
+                None => None,
+                Some(item) => match item {
+                    Ok(item_val) => Some(item_val.val),
+                    _ => None,
+                },
             },
         }
     }
 
-    pub fn set_il_val(&self, key: &str, val: &str) -> Result<usize,  rusqlite::Error> {
+    pub fn set_il_val(&self, key: &str, val: &str) -> Result<usize, rusqlite::Error> {
         let item = ILAgentItem::new(key, val);
         if self.get_il_value(key).is_some() {
             self.update_il_item(item)
@@ -198,7 +204,7 @@ impl ILDatabase {
         }
     }
 
-    fn create_il_item(&self, item: ILAgentItem) -> Result<usize,  rusqlite::Error> {
+    fn create_il_item(&self, item: ILAgentItem) -> Result<usize, rusqlite::Error> {
         let default_created = Utc::now().to_string();
         let created_at = item.created_at.as_ref().unwrap_or(&default_created);
         self.conn.execute(
@@ -207,7 +213,7 @@ impl ILDatabase {
         )
     }
 
-    fn update_il_item(&self, item: ILAgentItem) -> Result<usize,  rusqlite::Error> {
+    fn update_il_item(&self, item: ILAgentItem) -> Result<usize, rusqlite::Error> {
         self.conn.execute(
             "UPDATE ilagent SET val = ?1 WHERE key = ?2",
             &[&item.val as &dyn ToSql, &item.key],
@@ -226,7 +232,9 @@ impl ILDatabase {
         Ok(EventQueueItem {
             id: row.get(0).unwrap_or(None),
             integration_key: row.get(1).unwrap_or("".to_string()),
-            event_type: row.get(2).unwrap_or(ILertEventType::ALERT.as_str().to_string()),
+            event_type: row
+                .get(2)
+                .unwrap_or(ILertEventType::ALERT.as_str().to_string()),
             alert_key: row.get(3).unwrap_or(None),
             summary: row.get(4).unwrap_or("".to_string()),
             created_at: row.get(5).unwrap_or(None),
@@ -235,34 +243,26 @@ impl ILDatabase {
             links: row.get(8).unwrap_or(None),
             custom_details: row.get(9).unwrap_or(None),
             details: row.get(10).unwrap_or(None),
-            event_api_path: row.get(11).unwrap_or(None)
+            event_api_path: row.get(11).unwrap_or(None),
         })
     }
 
     pub fn get_il_event(&self, event_id: &str) -> Result<Option<EventQueueItem>, rusqlite::Error> {
-
         let mut stmt = self.conn.prepare("SELECT id, integration_key, event_type, alert_key, summary, created_at,
          priority, images, links, custom_details, details, event_api_path FROM event_items WHERE id = ?1")?;
-        let query_result = stmt
-            .query_map(&[&event_id], |row| {
-                ILDatabase::convert_db_row_to_event(row)
-            });
+        let query_result =
+            stmt.query_map(&[&event_id], |row| ILDatabase::convert_db_row_to_event(row));
 
         match query_result {
             Ok(items) => {
-
                 let vec = items
-                    .filter(|row_res| {
-                        match row_res {
-                            Ok(_row) => true,
-                            _ => false
-                        }
+                    .filter(|row_res| match row_res {
+                        Ok(_row) => true,
+                        _ => false,
                     })
-                    .map(|row_res| {
-                        match row_res {
-                            Ok(row) => row,
-                            _ => EventQueueItem::new()
-                        }
+                    .map(|row_res| match row_res {
+                        Ok(row) => row,
+                        _ => EventQueueItem::new(),
                     })
                     .collect::<Vec<EventQueueItem>>();
 
@@ -271,7 +271,7 @@ impl ILDatabase {
                 } else {
                     Ok(None)
                 }
-            },
+            }
             Err(e) => {
                 error!("Failed to fetch event item {:?}.", e);
                 Err(e)
@@ -279,35 +279,27 @@ impl ILDatabase {
         }
     }
 
-    pub fn get_il_events(&self, limit: i32) -> Result<Vec<EventQueueItem>,  rusqlite::Error> {
-
+    pub fn get_il_events(&self, limit: i32) -> Result<Vec<EventQueueItem>, rusqlite::Error> {
         let mut stmt = self.conn.prepare("SELECT id, integration_key, event_type, alert_key, summary, created_at,
          priority, images, links, custom_details, details, event_api_path FROM event_items ORDER BY inserted_at ASC LIMIT ?1")?;
-        let query_result = stmt
-            .query_map(&[&limit], |row| {
-                ILDatabase::convert_db_row_to_event(row)
-            });
+        let query_result =
+            stmt.query_map(&[&limit], |row| ILDatabase::convert_db_row_to_event(row));
 
         match query_result {
             Ok(items) => {
-
                 let vec = items
-                    .filter(|row_res| {
-                        match row_res {
-                            Ok(_row) => true,
-                            _ => false
-                        }
+                    .filter(|row_res| match row_res {
+                        Ok(_row) => true,
+                        _ => false,
                     })
-                    .map(|row_res| {
-                        match row_res {
-                            Ok(row) => row,
-                            _ => EventQueueItem::new()
-                        }
+                    .map(|row_res| match row_res {
+                        Ok(row) => row,
+                        _ => EventQueueItem::new(),
                     })
                     .collect::<Vec<EventQueueItem>>();
 
                 Ok(vec)
-            },
+            }
             Err(e) => {
                 error!("Failed to fetch events {:?}.", e);
                 Err(e)
@@ -315,8 +307,10 @@ impl ILDatabase {
         }
     }
 
-    pub fn create_il_event(&self, item: &EventQueueItem) -> Result<Option<EventQueueItem>,  rusqlite::Error> {
-
+    pub fn create_il_event(
+        &self,
+        item: &EventQueueItem,
+    ) -> Result<Option<EventQueueItem>, rusqlite::Error> {
         let default_created = Utc::now().to_string();
         let created_at = item.created_at.as_ref().unwrap_or(&default_created);
 
@@ -336,21 +330,21 @@ impl ILDatabase {
         );
 
         match insert_result {
-            Ok(_) => {
-                self.get_il_event(item_id.clone().unwrap_or("".to_string()).as_str())
-            },
-            Err(e) => Err(e)
+            Ok(_) => self.get_il_event(item_id.clone().unwrap_or("".to_string()).as_str()),
+            Err(e) => Err(e),
         }
     }
 
-    pub fn delete_il_event(&self, id: &str) -> Result<usize,  rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM event_items WHERE id = ?1",
-            &[&id],
-        )
+    pub fn delete_il_event(&self, id: &str) -> Result<usize, rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM event_items WHERE id = ?1", &[&id])
     }
 
-    pub fn create_mqtt_queue_item(&self, topic: &str, payload: &str) -> Result<String, rusqlite::Error> {
+    pub fn create_mqtt_queue_item(
+        &self,
+        topic: &str,
+        payload: &str,
+    ) -> Result<String, rusqlite::Error> {
         let id = Uuid::new_v4().to_string();
         self.conn.execute(
             "INSERT INTO mqtt_queue (id, topic, payload) VALUES (?1, ?2, ?3)",
@@ -376,9 +370,7 @@ impl ILDatabase {
     }
 
     pub fn delete_mqtt_queue_item(&self, id: &str) -> Result<usize, rusqlite::Error> {
-        self.conn.execute(
-            "DELETE FROM mqtt_queue WHERE id = ?1",
-            &[&id],
-        )
+        self.conn
+            .execute("DELETE FROM mqtt_queue WHERE id = ?1", &[&id])
     }
 }

@@ -2,20 +2,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tempfile::NamedTempFile;
-use rumqttc::{MqttOptions, Client, QoS};
 use ilert::ilert::ILert;
-use tokio::sync::Mutex;
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path_regex};
+use rumqttc::{Client, MqttOptions, QoS};
+use tempfile::NamedTempFile;
+use testcontainers::core::{IntoContainerPort, WaitFor};
 use testcontainers::{GenericImage, ImageExt, runners::AsyncRunner};
-use testcontainers::core::{WaitFor, IntoContainerPort};
+use tokio::sync::Mutex;
+use wiremock::matchers::{method, path_regex};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use ilagent::config::ILConfig;
-use ilagent::db::ILDatabase;
 use ilagent::DaemonContext;
+use ilagent::config::ILConfig;
 use ilagent::consumers::mqtt::run_mqtt_job;
-use ilagent::poll::{run_poll_job, run_mqtt_poll_job};
+use ilagent::db::ILDatabase;
+use ilagent::poll::{run_mqtt_poll_job, run_poll_job};
 
 async fn start_mosquitto() -> (testcontainers::ContainerAsync<GenericImage>, u16) {
     let mosquitto_conf = b"listener 1883 0.0.0.0\nallow_anonymous true\n".to_vec();
@@ -67,7 +67,9 @@ fn mqtt_publish(host: &str, port: u16, topic: &str, payload: &str) {
         }
     });
 
-    client.publish(topic, QoS::AtLeastOnce, false, payload.as_bytes()).unwrap();
+    client
+        .publish(topic, QoS::AtLeastOnce, false, payload.as_bytes())
+        .unwrap();
     std::thread::sleep(Duration::from_millis(500));
     let _ = client.disconnect();
     let _ = conn_handle.join();
@@ -92,12 +94,17 @@ async fn mqtt_event_lands_in_db() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
         "apiKey": "mqtt-test-key",
         "eventType": "ALERT",
         "summary": "MQTT e2e test",
         "alertKey": "mqtt-host-1"
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -138,9 +145,12 @@ async fn mqtt_multiple_events_fifo_order() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     for i in 0..3 {
-        mqtt_publish("127.0.0.1", port, "ilert/events", &format!(
-            r#"{{"apiKey": "k1", "eventType": "ALERT", "summary": "event-{i}"}}"#
-        ));
+        mqtt_publish(
+            "127.0.0.1",
+            port,
+            "ilert/events",
+            &format!(r#"{{"apiKey": "k1", "eventType": "ALERT", "summary": "event-{i}"}}"#),
+        );
     }
 
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -173,17 +183,25 @@ async fn mqtt_ignored_topic_not_queued() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish to a topic the consumer is NOT subscribed to
-    mqtt_publish("127.0.0.1", port, "other/topic", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "other/topic",
+        r#"{
         "apiKey": "k1",
         "eventType": "ALERT",
         "summary": "should be ignored"
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let db = ILDatabase::new(&db_path);
     let events = db.get_il_events(10).unwrap();
-    assert!(events.is_empty(), "no events should be queued for unrelated topic");
+    assert!(
+        events.is_empty(),
+        "no events should be queued for unrelated topic"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -209,11 +227,16 @@ async fn mqtt_invalid_json_dropped() {
     mqtt_publish("127.0.0.1", port, "ilert/events", "not json at all");
 
     // then publish a valid event to prove the consumer is still alive
-    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
         "apiKey": "k1",
         "eventType": "ALERT",
         "summary": "still alive"
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -233,9 +256,7 @@ async fn mqtt_event_e2e_with_poll() {
 
     Mock::given(method("POST"))
         .and(path_regex("/v1/events/mqtt/.*"))
-        .respond_with(
-            ResponseTemplate::new(202).insert_header("correlation-id", "mqtt-e2e-corr"),
-        )
+        .respond_with(ResponseTemplate::new(202).insert_header("correlation-id", "mqtt-e2e-corr"))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -277,12 +298,17 @@ async fn mqtt_event_e2e_with_poll() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish event via MQTT
-    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
         "apiKey": "mqtt-e2e-key",
         "eventType": "ALERT",
         "summary": "Full pipeline test",
         "alertKey": "pipe-1"
-    }"#);
+    }"#,
+    );
 
     // wait for poll job to pick up and deliver
     tokio::time::sleep(Duration::from_secs(8)).await;
@@ -290,7 +316,10 @@ async fn mqtt_event_e2e_with_poll() {
     // verify event was delivered and removed from queue
     let db = ILDatabase::new(&db_path);
     let remaining = db.get_il_events(10).unwrap();
-    assert!(remaining.is_empty(), "queue should be empty after poll delivery");
+    assert!(
+        remaining.is_empty(),
+        "queue should be empty after poll delivery"
+    );
 
     // wiremock expect(1) verifies the event was delivered exactly once
     daemon_ctx.running.store(false, Ordering::Relaxed);
@@ -304,31 +333,25 @@ async fn mqtt_policy_buffer_drain() {
 
     Mock::given(method("GET"))
         .and(path_regex("/api/escalation-policies/resolve.*"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": 42, "name": "Test Policy"
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 42, "name": "Test Policy"
+        })))
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("POST"))
         .and(path_regex("/api/users/search-email"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "id": 99, "email": "support@ilert.com", "username": "support"
-            })),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": 99, "email": "support@ilert.com", "username": "support"
+        })))
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("PUT"))
         .and(path_regex("/api/escalation-policies/42/levels/1"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -352,7 +375,8 @@ async fn mqtt_policy_buffer_drain() {
     let db = ILDatabase::new(&db_path);
     db.prepare_database();
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -370,12 +394,17 @@ async fn mqtt_policy_buffer_drain() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish policy message
-    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/policies",
+        r#"{
         "uuid": "550x8400-x29b-11d4-x716-446655440000",
         "location": "powerplant",
         "eventType": "active",
         "data": { "email": "support@ilert.com", "shift": "1" }
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -395,7 +424,10 @@ async fn mqtt_policy_buffer_drain() {
 
     // verify queue is drained
     let remaining = db.get_mqtt_queue_items(10).unwrap();
-    assert!(remaining.is_empty(), "mqtt_queue should be empty after successful processing");
+    assert!(
+        remaining.is_empty(),
+        "mqtt_queue should be empty after successful processing"
+    );
 
     // wiremock expect() verifies all API calls were made
     daemon_ctx.running.store(false, Ordering::Relaxed);
@@ -431,7 +463,8 @@ async fn mqtt_policy_buffer_retry_on_failure() {
     let db = ILDatabase::new(&db_path);
     db.prepare_database();
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -454,11 +487,16 @@ async fn mqtt_policy_buffer_retry_on_failure() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish policy message
-    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/policies",
+        r#"{
         "location": "powerplant",
         "eventType": "active",
         "data": { "email": "support@ilert.com", "shift": "1" }
-    }"#);
+    }"#,
+    );
 
     // wait for poll to attempt processing
     tokio::time::sleep(Duration::from_secs(15)).await;
@@ -466,7 +504,11 @@ async fn mqtt_policy_buffer_retry_on_failure() {
     // verify message is still in queue (not deleted due to failure)
     let db = ILDatabase::new(&db_path);
     let queued = db.get_mqtt_queue_items(10).unwrap();
-    assert_eq!(queued.len(), 1, "failed message should remain in mqtt_queue for retry");
+    assert_eq!(
+        queued.len(),
+        1,
+        "failed message should remain in mqtt_queue for retry"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -498,7 +540,8 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     let db = ILDatabase::new(&db_path);
     db.prepare_database();
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -521,12 +564,17 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish with inactive eventType — should be filtered
-    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/policies",
+        r#"{
         "uuid": "test-uuid",
         "location": "powerplant",
         "eventType": "inactive",
         "data": { "email": "support@ilert.com", "shift": "1" }
-    }"#);
+    }"#,
+    );
 
     // wait for poll to process and drop the filtered message
     tokio::time::sleep(Duration::from_secs(15)).await;
@@ -534,7 +582,10 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     // verify queue is drained (filtered = no retry, just deleted)
     let db = ILDatabase::new(&db_path);
     let remaining = db.get_mqtt_queue_items(10).unwrap();
-    assert!(remaining.is_empty(), "filtered message should be removed from queue");
+    assert!(
+        remaining.is_empty(),
+        "filtered message should be removed from queue"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -570,7 +621,8 @@ async fn mqtt_policy_buffer_max_retries_drops_message() {
     let db = ILDatabase::new(&db_path);
     db.prepare_database();
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -593,11 +645,16 @@ async fn mqtt_policy_buffer_max_retries_drops_message() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish policy message
-    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/policies",
+        r#"{
         "location": "powerplant",
         "eventType": "active",
         "data": { "email": "support@ilert.com", "shift": "1" }
-    }"#);
+    }"#,
+    );
 
     // wait for poll to exhaust retries — needs ~10s first poll + 20s backoff for 2 attempts
     tokio::time::sleep(Duration::from_secs(35)).await;
@@ -605,7 +662,10 @@ async fn mqtt_policy_buffer_max_retries_drops_message() {
     // verify message was dropped from queue after exceeding max retries
     let db = ILDatabase::new(&db_path);
     let queued = db.get_mqtt_queue_items(10).unwrap();
-    assert!(queued.is_empty(), "message should be dropped after exceeding max_retries");
+    assert!(
+        queued.is_empty(),
+        "message should be dropped after exceeding max_retries"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -640,7 +700,8 @@ async fn mqtt_policy_buffer_unlimited_retries_keeps_message() {
     let db = ILDatabase::new(&db_path);
     db.prepare_database();
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -662,18 +723,27 @@ async fn mqtt_policy_buffer_unlimited_retries_keeps_message() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    mqtt_publish("127.0.0.1", port, "ilert/policies", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/policies",
+        r#"{
         "location": "powerplant",
         "eventType": "active",
         "data": { "email": "support@ilert.com", "shift": "1" }
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(15)).await;
 
     // with unlimited retries, message should still be in queue
     let db = ILDatabase::new(&db_path);
     let queued = db.get_mqtt_queue_items(10).unwrap();
-    assert_eq!(queued.len(), 1, "message should remain in queue with unlimited retries");
+    assert_eq!(
+        queued.len(),
+        1,
+        "message should remain in queue with unlimited retries"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -717,7 +787,11 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
         "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
         "location": "powerplant",
         "field": "assembly",
@@ -736,7 +810,8 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
             "description": "",
             "alarmGroup": []
         }
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -748,7 +823,10 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
     assert_eq!(events[0].integration_key, "il1api-test-key");
     assert_eq!(events[0].event_type, "ALERT"); // "alertCreated" mapped to ALERT
     assert_eq!(events[0].summary, "Anomaly detected on pump unit 2");
-    assert_eq!(events[0].alert_key.as_ref().unwrap(), "f9e8d7c6-b5a4-3210-fedc-ba9876543210");
+    assert_eq!(
+        events[0].alert_key.as_ref().unwrap(),
+        "f9e8d7c6-b5a4-3210-fedc-ba9876543210"
+    );
 
     // verify customDetails contains the full original payload
     let cd: serde_json::Value =
@@ -764,7 +842,10 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
     assert_eq!(cd["data"]["alarmGroup"], serde_json::json!([]));
 
     // verify MQTT metadata is NOT merged into forwarded payload
-    assert!(cd.get("topic").is_none(), "topic should not pollute the original payload");
+    assert!(
+        cd.get("topic").is_none(),
+        "topic should not pollute the original payload"
+    );
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
@@ -809,11 +890,16 @@ async fn mqtt_event_with_config_mappings() {
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // publish with custom field names (no apiKey, eventType, summary — all mapped)
-    mqtt_publish("127.0.0.1", port, "ilert/events", r#"{
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
         "state": "SET",
         "mCode": "M-100",
         "msg": "Pump failure detected"
-    }"#);
+    }"#,
+    );
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 

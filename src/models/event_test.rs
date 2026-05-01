@@ -236,7 +236,8 @@ mod tests {
     fn parse_event_filter_key_present_passes() {
         let mut config = default_config();
         config.filter_key = Some("type".to_string());
-        let payload = r#"{"apiKey": "k1", "type": "ALARM", "eventType": "ALERT", "summary": "test"}"#;
+        let payload =
+            r#"{"apiKey": "k1", "type": "ALARM", "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
     }
@@ -255,7 +256,8 @@ mod tests {
         let mut config = default_config();
         config.filter_key = Some("type".to_string());
         config.filter_val = Some("ALARM".to_string());
-        let payload = r#"{"apiKey": "k1", "type": "ALARM", "eventType": "ALERT", "summary": "test"}"#;
+        let payload =
+            r#"{"apiKey": "k1", "type": "ALARM", "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_some());
     }
@@ -265,7 +267,8 @@ mod tests {
         let mut config = default_config();
         config.filter_key = Some("type".to_string());
         config.filter_val = Some("ALARM".to_string());
-        let payload = r#"{"apiKey": "k1", "type": "INFO", "eventType": "ALERT", "summary": "test"}"#;
+        let payload =
+            r#"{"apiKey": "k1", "type": "INFO", "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
         assert!(result.is_none());
     }
@@ -279,7 +282,10 @@ mod tests {
         config.filter_val = Some("ALARM".to_string());
         let payload = r#"{"apiKey": "k1", "type": 123, "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
-        assert!(result.is_none(), "non-string filter value should be rejected");
+        assert!(
+            result.is_none(),
+            "non-string filter value should be rejected"
+        );
     }
 
     #[test]
@@ -289,7 +295,10 @@ mod tests {
         // no filter_val set, just checking key existence
         let payload = r#"{"apiKey": "k1", "type": 123, "eventType": "ALERT", "summary": "test"}"#;
         let result = EventQueueItemJson::parse_event_json(&config, payload, "ilert/events");
-        assert!(result.is_some(), "key-only filter should pass when key exists regardless of type");
+        assert!(
+            result.is_some(),
+            "key-only filter should pass when key exists regardless of type"
+        );
     }
 
     // --- parse_event_json: default summary fallback ---
@@ -349,9 +358,13 @@ mod tests {
             customDetails: Some(serde_json::json!({"env": "prod", "host": "srv1"})),
         };
 
-        let db_item = EventQueueItemJson::to_db(original.clone(), Some("/v1/events/mqtt/key1".to_string()));
+        let db_item =
+            EventQueueItemJson::to_db(original.clone(), Some("/v1/events/mqtt/key1".to_string()));
         assert_eq!(db_item.integration_key, "key1");
-        assert_eq!(db_item.event_api_path.as_ref().unwrap(), "/v1/events/mqtt/key1");
+        assert_eq!(
+            db_item.event_api_path.as_ref().unwrap(),
+            "/v1/events/mqtt/key1"
+        );
 
         let restored = EventQueueItemJson::from_db(db_item);
         assert_eq!(restored.integrationKey, "key1");
