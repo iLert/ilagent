@@ -4,6 +4,12 @@
 
 * **BREAKING** `--event_topic` and `--heartbeat_topic` are no longer subscribed by default in MQTT mode, at least one topic (`--event_topic`, `--heartbeat_topic`, or `--policy_topic`) must be explicitly configured
 * **BREAKING** MQTT non-buffered mode now requires `--mqtt_qos 1` or `--mqtt_qos 2` — QoS 0 without `--mqtt_buffer` is rejected at startup because there is no broker acknowledgement to delay on delivery failure. Non-buffered mode delivers events and heartbeats directly to ilert inline, making it possible to run MQTT without SQLite
+* **BREAKING** Kafka mode no longer implicitly starts the HTTP server — pass `--port` explicitly if you need health/readiness endpoints alongside Kafka
+* readiness endpoint (`/ready`) now reflects actual consumer state: MQTT must be connected with all subscriptions acknowledged, Kafka must have a running consumer with active topic subscriptions — returns 503 with structured JSON diagnostics (`component`, `connected`, `subscriptions_ready`, `error`) until the consumer is fully operational
+* health endpoint (`/health`) returns 503 during graceful shutdown instead of 204
+* Kafka consumer now shuts down gracefully on SIGINT/SIGTERM instead of requiring a process kill
+* if MQTT or Kafka worker exits unexpectedly while the HTTP server is running, the agent detects it and initiates shutdown instead of continuing in a half-broken state
+* Kafka consumer creation and topic subscription failures are now handled gracefully with error logging instead of panicking the process
 * added TLS certificate hot reload for MQTT — certificates are polled every 30s and the connection is transparently re-established when files change on disk
 * moved from `TlsConfiguration::Simple` to `TlsConfiguration::Rustls` with explicit PEM parsing and validation
 * fixed buffered MQTT event durability: `enqueue_event` now distinguishes insert success, filtered payload, and database failure so that `mqtt_queue` items are retained for retry on DB errors instead of being silently dropped
