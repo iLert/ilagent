@@ -19,6 +19,8 @@ uuid = { version = "1.22", features = ["v4"] }
 ctrlc = { version = "3.5" }
 rusqlite = { version = "0.38", features = ["bundled"] } # SQLite 3.46.0
 rumqttc = "0.25"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 rdkafka = { version = "0.39", features = ["cmake-build"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 

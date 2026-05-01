@@ -1,0 +1,4 @@
+- "ilert" is always lower-case, never use the capital L version
+- when creating plans write them as markdown files into `/_agent_plans`
+- new features should be properly covered by tests (when kafka or mqtt are involved favorably integration tests)
+- when creating unit tests, dont just mock everything, they must have actual branch value

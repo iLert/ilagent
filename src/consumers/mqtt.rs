@@ -1,9 +1,12 @@
 use log::{info, error, warn};
 use std::time::Duration;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use rumqttc::{MqttOptions, Client, QoS, Incoming, Event, Transport, TlsConfiguration};
 use std::{str, thread};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use rustls::RootCertStore;
 use crate::db::ILDatabase;
 use crate::config::ILConfig;
 use crate::{hbt, DaemonContext};
@@ -62,30 +65,78 @@ pub fn build_event_api_path(integration_key: &str) -> String {
     super::build_event_api_path("mqtt", integration_key)
 }
 
-fn build_tls_transport(config: &ILConfig) -> Transport {
-    let ca = match &config.mqtt_ca_path {
-        Some(path) => std::fs::read(path).expect("Failed to read MQTT CA certificate file"),
-        None => {
-            warn!("No CA certificate provided, using system default certificates");
-            return Transport::tls_with_default_config();
+struct TlsMaterial {
+    ca: Vec<u8>,
+    client_auth: Option<(Vec<u8>, Vec<u8>)>,
+    fingerprint: u64,
+}
+
+impl TlsMaterial {
+    fn try_load(config: &ILConfig) -> Result<Option<TlsMaterial>, String> {
+        let ca = match &config.mqtt_ca_path {
+            Some(path) => std::fs::read(path)
+                .map_err(|e| format!("Failed to read MQTT CA certificate file {}: {}", path, e))?,
+            None => return Ok(None),
+        };
+
+        let client_auth = match (&config.mqtt_client_cert_path, &config.mqtt_client_key_path) {
+            (Some(cert_path), Some(key_path)) => {
+                let cert = std::fs::read(cert_path)
+                    .map_err(|e| format!("Failed to read MQTT client certificate file {}: {}", cert_path, e))?;
+                let key = std::fs::read(key_path)
+                    .map_err(|e| format!("Failed to read MQTT client key file {}: {}", key_path, e))?;
+                Some((cert, key))
+            },
+            _ => None,
+        };
+
+        let mut hasher = DefaultHasher::new();
+        ca.hash(&mut hasher);
+        if let Some((ref cert, ref key)) = client_auth {
+            cert.hash(&mut hasher);
+            key.hash(&mut hasher);
         }
-    };
 
-    let client_auth = match (&config.mqtt_client_cert_path, &config.mqtt_client_key_path) {
-        (Some(cert_path), Some(key_path)) => {
-            let cert = std::fs::read(cert_path).expect("Failed to read MQTT client certificate file");
-            let key = std::fs::read(key_path).expect("Failed to read MQTT client key file");
-            Some((cert, key))
-        },
-        _ => None
-    };
+        Ok(Some(TlsMaterial { ca, client_auth, fingerprint: hasher.finish() }))
+    }
 
-    let tls_config = TlsConfiguration::Simple {
-        ca,
-        alpn: None,
-        client_auth,
-    };
-    Transport::tls_with_config(tls_config)
+    fn try_into_transport(self) -> Result<Transport, String> {
+        let mut root_store = RootCertStore::empty();
+        let ca_certs: Vec<_> = rustls_pemfile::certs(&mut &self.ca[..])
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to parse CA certificate PEM: {}", e))?;
+        if ca_certs.is_empty() {
+            return Err("CA certificate file contains no certificates".to_string());
+        }
+        for cert in &ca_certs {
+            root_store.add(cert.clone())
+                .map_err(|e| format!("Invalid CA certificate: {}", e))?;
+        }
+
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config_builder = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("Failed to configure TLS protocol versions: {}", e))?
+            .with_root_certificates(root_store);
+
+        let client_config = if let Some((cert_bytes, key_bytes)) = self.client_auth {
+            let certs: Vec<_> = rustls_pemfile::certs(&mut &cert_bytes[..])
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to parse client certificate PEM: {}", e))?;
+            if certs.is_empty() {
+                return Err("Client certificate file contains no certificates".to_string());
+            }
+            let key = rustls_pemfile::private_key(&mut &key_bytes[..])
+                .map_err(|e| format!("Failed to parse client key PEM: {}", e))?
+                .ok_or_else(|| "Client key file contains no private key".to_string())?;
+            config_builder.with_client_auth_cert(certs, key)
+                .map_err(|e| format!("Client certificate and key are incompatible: {}", e))?
+        } else {
+            config_builder.with_no_client_auth()
+        };
+
+        Ok(Transport::tls_with_config(TlsConfiguration::Rustls(Arc::new(client_config))))
+    }
 }
 
 pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
@@ -97,30 +148,7 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
     let mqtt_host = daemon_ctx.config.mqtt_host.clone().expect("Missing mqtt host");
     let mqtt_port = daemon_ctx.config.mqtt_port.clone().expect("Missing mqtt port");
-    let mut mqtt_options = MqttOptions::new(
-        daemon_ctx.config.mqtt_name.clone().expect("Missing mqtt name"),
-        mqtt_host.as_str(),
-        mqtt_port,
-    );
-
-    mqtt_options
-        .set_keep_alive(Duration::from_secs(5))
-        .set_pending_throttle(Duration::from_secs(1))
-        .set_clean_session(false);
-
-    if let Some(mqtt_username) = daemon_ctx.config.mqtt_username.clone() {
-        mqtt_options.set_credentials(mqtt_username.as_str(),
-                                     daemon_ctx.config.mqtt_password.clone()
-                                         .expect("mqtt_username is set, expecting mqtt_password to be set as well").as_str());
-    }
-
-    if daemon_ctx.config.mqtt_tls {
-        let transport = build_tls_transport(&daemon_ctx.config);
-        mqtt_options.set_transport(transport);
-        info!("MQTT TLS enabled");
-    }
-
-    let (client, mut connection) = Client::new(mqtt_options, 10);
+    let mqtt_name = daemon_ctx.config.mqtt_name.clone().expect("Missing mqtt name");
 
     let event_topic = daemon_ctx.config.event_topic.clone().expect("Missing mqtt event topic");
     let heartbeat_topic = daemon_ctx.config.heartbeat_topic.clone().expect("Missing mqtt heartbeat topic");
@@ -142,23 +170,105 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
         }
     };
 
-    client.subscribe(sub_topic(&event_topic).as_str(), qos)
-        .expect("Failed to subscribe to mqtt event topic");
+    let mut active_tls_fp: Option<u64> = None;
+    let mut staged_transport: Option<(Transport, u64)> = None;
 
-    client.subscribe(sub_topic(&heartbeat_topic).as_str(), qos)
-        .expect("Failed to subscribe to mqtt heartbeat topic");
-
-    if let Some(ref pt) = policy_topic {
-        client.subscribe(sub_topic(pt).as_str(), qos)
-            .expect("Failed to subscribe to mqtt policy topic");
-        info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos,
-            shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
-    } else {
-        info!("Subscribing to mqtt topics {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), qos,
-            shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
+    if daemon_ctx.config.mqtt_tls {
+        match TlsMaterial::try_load(&daemon_ctx.config) {
+            Ok(Some(material)) => {
+                let fp = material.fingerprint;
+                let transport = material.try_into_transport()
+                    .expect("Invalid TLS certificate material");
+                active_tls_fp = Some(fp);
+                staged_transport = Some((transport, fp));
+            },
+            Ok(None) => {
+                warn!("No CA certificate provided, using system default certificates");
+            },
+            Err(e) => panic!("{}", e),
+        }
     }
 
     loop {
+
+        let mut mqtt_options = MqttOptions::new(
+            mqtt_name.as_str(),
+            mqtt_host.as_str(),
+            mqtt_port,
+        );
+
+        mqtt_options
+            .set_keep_alive(Duration::from_secs(5))
+            .set_pending_throttle(Duration::from_secs(1))
+            .set_clean_session(false);
+
+        if let Some(mqtt_username) = daemon_ctx.config.mqtt_username.clone() {
+            mqtt_options.set_credentials(mqtt_username.as_str(),
+                                         daemon_ctx.config.mqtt_password.clone()
+                                             .expect("mqtt_username is set, expecting mqtt_password to be set as well").as_str());
+        }
+
+        let mut attempt_tls_fp: Option<u64> = None;
+
+        if daemon_ctx.config.mqtt_tls {
+            let transport = if let Some((transport, fp)) = staged_transport.take() {
+                attempt_tls_fp = Some(fp);
+                transport
+            } else if active_tls_fp.is_some() {
+                match TlsMaterial::try_load(&daemon_ctx.config) {
+                    Ok(Some(material)) => {
+                        let fp = material.fingerprint;
+                        match material.try_into_transport() {
+                            Ok(transport) => {
+                                attempt_tls_fp = Some(fp);
+                                transport
+                            },
+                            Err(e) => {
+                                error!("Failed to build TLS transport: {}", e);
+                                let delay_ms = std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
+                                recon_attempts += 1;
+                                thread::sleep(Duration::from_millis(delay_ms));
+                                continue;
+                            },
+                        }
+                    },
+                    Ok(None) => Transport::tls_with_default_config(),
+                    Err(e) => {
+                        error!("Failed to load TLS certificates for reconnect: {}", e);
+                        let delay_ms = std::cmp::min(100 * 2u64.pow(recon_attempts.min(10)), 30_000);
+                        recon_attempts += 1;
+                        thread::sleep(Duration::from_millis(delay_ms));
+                        continue;
+                    },
+                }
+            } else {
+                Transport::tls_with_default_config()
+            };
+            mqtt_options.set_transport(transport);
+            info!("MQTT TLS enabled");
+        }
+
+        let (client, mut connection) = Client::new(mqtt_options, 10);
+
+        client.subscribe(sub_topic(&event_topic).as_str(), qos)
+            .expect("Failed to subscribe to mqtt event topic");
+
+        client.subscribe(sub_topic(&heartbeat_topic).as_str(), qos)
+            .expect("Failed to subscribe to mqtt heartbeat topic");
+
+        if let Some(ref pt) = policy_topic {
+            client.subscribe(sub_topic(pt).as_str(), qos)
+                .expect("Failed to subscribe to mqtt policy topic");
+            info!("Subscribing to mqtt topics {}, {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), pt.as_str(), qos,
+                shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
+        } else {
+            info!("Subscribing to mqtt topics {} and {} (QoS {:?}{})", event_topic.as_str(), heartbeat_topic.as_str(), qos,
+                shared_prefix.as_ref().map(|p| format!(", shared: {}", p)).unwrap_or_default());
+        }
+
+        let mut tls_reload_requested = false;
+        let mut last_tls_check = std::time::Instant::now();
+        let tls_check_interval = Duration::from_secs(30);
 
         info!("Connecting to Mqtt server..");
         for (_i, invoke) in connection.iter().enumerate() {
@@ -167,11 +277,36 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 break;
             }
 
+            if active_tls_fp.is_some() && last_tls_check.elapsed() >= tls_check_interval {
+                last_tls_check = std::time::Instant::now();
+                match TlsMaterial::try_load(&daemon_ctx.config) {
+                    Ok(Some(material)) => {
+                        if Some(material.fingerprint) != active_tls_fp {
+                            let fp = material.fingerprint;
+                            match material.try_into_transport() {
+                                Ok(transport) => {
+                                    info!("TLS certificate change detected, reconnecting with new certificates..");
+                                    staged_transport = Some((transport, fp));
+                                    tls_reload_requested = true;
+                                    let _ = client.disconnect();
+                                    break;
+                                },
+                                Err(e) => {
+                                    warn!("TLS certificates changed but are invalid, keeping current connection: {}", e);
+                                },
+                            }
+                        }
+                    },
+                    Ok(None) => {},
+                    Err(e) => {
+                        warn!("Failed to read TLS certificates during reload check, keeping current connection: {}", e);
+                    },
+                }
+            }
+
             match invoke {
                 Err(e) => {
                     error!("mqtt error {:?}", e);
-                    connected = false;
-                    // break to outer loop so exponential backoff applies
                     break;
                 },
                 _ => ()
@@ -179,6 +314,9 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
 
             if !connected {
                 connected = true;
+                if let Some(fp) = attempt_tls_fp {
+                    active_tls_fp = Some(fp);
+                }
                 info!("Connected to mqtt server {}:{}", mqtt_host.as_str(), mqtt_port);
             }
 
@@ -206,9 +344,15 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
             }
         }
 
-        // faster exits
         if !daemon_ctx.running.load(Ordering::Relaxed) {
             break;
+        }
+
+        connected = false;
+
+        if tls_reload_requested {
+            recon_attempts = 0;
+            continue;
         }
 
         // exponential backoff, capped at 30 seconds
@@ -515,5 +659,189 @@ mod tests {
         // custom details should have topic injected
         let cd: serde_json::Value = serde_json::from_str(&db_item.custom_details.unwrap()).unwrap();
         assert_eq!(cd["topic"], "factory/alarms");
+    }
+
+    // --- TlsMaterial ---
+
+    #[test]
+    fn tls_no_ca_path_returns_none() {
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        assert!(TlsMaterial::try_load(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn tls_missing_ca_file_returns_error() {
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some("/nonexistent/ca.pem".to_string());
+        assert!(TlsMaterial::try_load(&config).is_err());
+    }
+
+    #[test]
+    fn tls_missing_client_cert_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+        config.mqtt_client_cert_path = Some("/nonexistent/client.pem".to_string());
+        config.mqtt_client_key_path = Some("/nonexistent/client.key".to_string());
+        assert!(TlsMaterial::try_load(&config).is_err());
+    }
+
+    #[test]
+    fn tls_same_bytes_produce_same_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+
+        let m1 = TlsMaterial::try_load(&config).unwrap().unwrap();
+        let m2 = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert_eq!(m1.fingerprint, m2.fingerprint);
+    }
+
+    #[test]
+    fn tls_fingerprint_changes_when_ca_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+
+        std::fs::write(&ca_path, b"ca-cert-v1").unwrap();
+        let m1 = TlsMaterial::try_load(&config).unwrap().unwrap();
+
+        std::fs::write(&ca_path, b"ca-cert-v2").unwrap();
+        let m2 = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert_ne!(m1.fingerprint, m2.fingerprint);
+    }
+
+    #[test]
+    fn tls_fingerprint_changes_when_client_cert_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+        std::fs::write(&cert_path, b"client-cert-v1").unwrap();
+        std::fs::write(&key_path, b"client-key").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+        config.mqtt_client_cert_path = Some(cert_path.to_str().unwrap().to_string());
+        config.mqtt_client_key_path = Some(key_path.to_str().unwrap().to_string());
+
+        let m1 = TlsMaterial::try_load(&config).unwrap().unwrap();
+
+        std::fs::write(&cert_path, b"client-cert-v2").unwrap();
+        let m2 = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert_ne!(m1.fingerprint, m2.fingerprint);
+    }
+
+    #[test]
+    fn tls_fingerprint_changes_when_client_key_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+        std::fs::write(&cert_path, b"client-cert").unwrap();
+        std::fs::write(&key_path, b"client-key-v1").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+        config.mqtt_client_cert_path = Some(cert_path.to_str().unwrap().to_string());
+        config.mqtt_client_key_path = Some(key_path.to_str().unwrap().to_string());
+
+        let m1 = TlsMaterial::try_load(&config).unwrap().unwrap();
+
+        std::fs::write(&key_path, b"client-key-v2").unwrap();
+        let m2 = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert_ne!(m1.fingerprint, m2.fingerprint);
+    }
+
+    #[test]
+    fn tls_load_failure_preserves_previous_fingerprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+
+        let original = TlsMaterial::try_load(&config).unwrap().unwrap();
+        let original_fp = original.fingerprint;
+
+        std::fs::remove_file(&ca_path).unwrap();
+        assert!(TlsMaterial::try_load(&config).is_err());
+
+        std::fs::write(&ca_path, b"ca-cert").unwrap();
+        let restored = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert_eq!(original_fp, restored.fingerprint);
+    }
+
+    // --- TlsMaterial::try_into_transport validation ---
+
+    #[test]
+    fn tls_invalid_ca_pem_rejects() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, b"not valid pem data").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+
+        let material = TlsMaterial::try_load(&config).unwrap().unwrap();
+        match material.try_into_transport() {
+            Err(e) => assert!(e.contains("no certificates"), "expected 'no certificates' error, got: {}", e),
+            Ok(_) => panic!("expected error for invalid CA PEM"),
+        }
+    }
+
+    #[test]
+    fn tls_invalid_client_cert_pem_rejects() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        let cert_path = dir.path().join("client.pem");
+        let key_path = dir.path().join("client.key");
+
+        std::fs::write(&ca_path, include_str!("../../tests/fixtures/ca.pem")).unwrap();
+        std::fs::write(&cert_path, b"not a certificate").unwrap();
+        std::fs::write(&key_path, b"not a key").unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+        config.mqtt_client_cert_path = Some(cert_path.to_str().unwrap().to_string());
+        config.mqtt_client_key_path = Some(key_path.to_str().unwrap().to_string());
+
+        let material = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert!(material.try_into_transport().is_err());
+    }
+
+    #[test]
+    fn tls_valid_ca_pem_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, include_str!("../../tests/fixtures/ca.pem")).unwrap();
+
+        let mut config = ILConfig::new();
+        config.mqtt_tls = true;
+        config.mqtt_ca_path = Some(ca_path.to_str().unwrap().to_string());
+
+        let material = TlsMaterial::try_load(&config).unwrap().unwrap();
+        assert!(material.try_into_transport().is_ok());
     }
 }
