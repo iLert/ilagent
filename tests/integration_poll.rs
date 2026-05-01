@@ -334,6 +334,8 @@ async fn event_poll_max_retries_drops_event() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();
@@ -392,6 +394,8 @@ async fn event_poll_unlimited_retries_keeps_event() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();

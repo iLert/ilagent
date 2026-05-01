@@ -1,11 +1,15 @@
 use actix_web::{App, test, web};
 use ilert::ilert::ILert;
 use serde_json::json;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
+use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::http_server::{WebContextContainer, config_app};
+use ilagent::{DaemonContext, KafkaProbeState, MqttProbeState};
 
 fn test_container() -> (web::Data<Mutex<WebContextContainer>>, NamedTempFile) {
     let file = NamedTempFile::new().unwrap();
@@ -259,4 +263,337 @@ async fn post_multiple_events_all_queued() {
     let c = container.lock().await;
     let events = c.db.get_il_events(10).unwrap();
     assert_eq!(events.len(), 3);
+}
+
+// --- health/ready with daemon context ---
+
+fn test_daemon_ctx(
+    mqtt_probe: Option<MqttProbeState>,
+) -> (
+    web::Data<Mutex<WebContextContainer>>,
+    web::Data<Arc<DaemonContext>>,
+    NamedTempFile,
+) {
+    test_daemon_ctx_full(mqtt_probe, None)
+}
+
+fn test_daemon_ctx_full(
+    mqtt_probe: Option<MqttProbeState>,
+    kafka_probe: Option<KafkaProbeState>,
+) -> (
+    web::Data<Mutex<WebContextContainer>>,
+    web::Data<Arc<DaemonContext>>,
+    NamedTempFile,
+) {
+    let file = NamedTempFile::new().unwrap();
+    let db_path = file.path().to_str().unwrap();
+    let db = ILDatabase::new(db_path);
+    db.prepare_database();
+    let ilert_client = ILert::new().unwrap();
+    let container = web::Data::new(Mutex::new(WebContextContainer {
+        db: ILDatabase::new(db_path),
+        ilert_client: ILert::new().unwrap(),
+    }));
+
+    let mut config = ILConfig::new();
+    config.db_file = db_path.to_string();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+        mqtt_probe,
+        kafka_probe,
+    });
+
+    (container, web::Data::new(daemon_ctx), file)
+}
+
+#[actix_rt::test]
+async fn health_returns_204_while_running() {
+    let (container, daemon_data, _f) = test_daemon_ctx(None);
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/health").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
+}
+
+#[actix_rt::test]
+async fn health_returns_503_after_shutdown() {
+    let (container, daemon_data, _f) = test_daemon_ctx(None);
+    daemon_data.running.store(false, Ordering::Relaxed);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/health").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_mqtt_before_connection() {
+    let probe = MqttProbeState::new(2);
+    let (container, daemon_data, _f) = test_daemon_ctx(Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "mqtt");
+    assert_eq!(body["connected"], false);
+    assert_eq!(body["subscriptions_ready"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_mqtt_connected_but_no_suback() {
+    let probe = MqttProbeState::new(2);
+    probe.set_connected();
+    let (container, daemon_data, _f) = test_daemon_ctx(Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["subscriptions_ready"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_mqtt_partial_suback() {
+    let probe = MqttProbeState::new(2);
+    probe.set_connected();
+    probe.record_suback_success();
+    let (container, daemon_data, _f) = test_daemon_ctx(Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["connected"], true);
+    assert_eq!(body["subscriptions_ready"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_204_mqtt_fully_ready() {
+    let probe = MqttProbeState::new(2);
+    probe.set_connected();
+    probe.record_suback_success();
+    probe.record_suback_success();
+    let (container, daemon_data, _f) = test_daemon_ctx(Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_after_mqtt_disconnect() {
+    let probe = MqttProbeState::new(2);
+    probe.set_connected();
+    probe.record_suback_success();
+    probe.record_suback_success();
+    assert!(probe.is_ready());
+
+    probe.reset();
+    probe.record_error("Connection lost".to_string());
+
+    let (container, daemon_data, _f) = test_daemon_ctx(Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["connected"], false);
+    assert_eq!(body["error"], "Connection lost");
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_when_shutting_down() {
+    let (container, daemon_data, _f) = test_daemon_ctx(None);
+    daemon_data.running.store(false, Ordering::Relaxed);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "daemon");
+}
+
+#[actix_rt::test]
+async fn ready_returns_204_http_only_mode() {
+    let (container, daemon_data, _f) = test_daemon_ctx(None);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
+}
+
+// --- Kafka readiness ---
+
+#[actix_rt::test]
+async fn ready_returns_503_kafka_before_consumer_started() {
+    let probe = KafkaProbeState::new();
+    let (container, daemon_data, _f) = test_daemon_ctx_full(None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "kafka");
+    assert_eq!(body["consumer_started"], false);
+    assert_eq!(body["subscribed"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_kafka_started_not_subscribed() {
+    let probe = KafkaProbeState::new();
+    probe.consumer_started.store(true, Ordering::Relaxed);
+    let (container, daemon_data, _f) = test_daemon_ctx_full(None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["consumer_started"], true);
+    assert_eq!(body["subscribed"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_204_kafka_subscribed_and_running() {
+    let probe = KafkaProbeState::new();
+    probe.consumer_started.store(true, Ordering::Relaxed);
+    probe.subscribed.store(true, Ordering::Relaxed);
+    let (container, daemon_data, _f) = test_daemon_ctx_full(None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_kafka_worker_exited() {
+    let probe = KafkaProbeState::new();
+    probe.consumer_started.store(true, Ordering::Relaxed);
+    probe.subscribed.store(true, Ordering::Relaxed);
+    probe.worker_exited.store(true, Ordering::Relaxed);
+    probe.record_error("broker connection lost".to_string());
+    let (container, daemon_data, _f) = test_daemon_ctx_full(None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "kafka");
+    assert_eq!(body["worker_exited"], true);
+    assert_eq!(body["error"], "broker connection lost");
 }

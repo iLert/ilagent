@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
-use ilagent::{DaemonContext, cleanup, consumers, hbt, http_server, poll, version_check};
+use ilagent::{DaemonContext, KafkaProbeState, MqttProbeState, cleanup, consumers, hbt, http_server, poll, version_check};
 
 fn strip_bearer_prefix(key: String) -> String {
     if let Some(stripped) = key.strip_prefix("Bearer ") {
@@ -424,10 +424,6 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
         }
 
         config = parse_consumer_arguments(matches, config);
-        if !config.start_http {
-            config.start_http = true;
-            warn!("The current version of ilagent, enforces the http server when kafka is used");
-        }
     }
 
     if let Some(file) = global_matches.get_one::<String>("file") {
@@ -597,22 +593,34 @@ async fn run_daemon(config: &ILConfig) {
     info!("Migrating DB..");
     db.prepare_database();
 
+    let mqtt_probe = if config.mqtt_host.is_some() {
+        let expected = consumers::mqtt::configured_topic_count(config);
+        Some(MqttProbeState::new(expected))
+    } else {
+        None
+    };
+
+    let kafka_probe = if config.kafka_brokers.is_some() {
+        Some(KafkaProbeState::new())
+    } else {
+        None
+    };
+
     let daemon_ctx = Arc::new(DaemonContext {
         config: config.clone(),
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe,
+        kafka_probe,
     });
 
-    // kafka stream will not exit when ctrlc hook is present
-    if config.kafka_brokers.is_none() {
-        let ctrlc_ctx = daemon_ctx.clone();
-        ctrlc::set_handler(move || {
-            info!("Received Ctrl+C. Shutting down threads...");
-            ctrlc_ctx.running.store(false, Ordering::Relaxed);
-        })
-        .expect("Error setting Ctrl-C handler");
-    }
+    let ctrlc_ctx = daemon_ctx.clone();
+    ctrlc::set_handler(move || {
+        info!("Received Ctrl+C. Shutting down threads...");
+        ctrlc_ctx.running.store(false, Ordering::Relaxed);
+    })
+    .expect("Error setting Ctrl-C handler");
 
     // poll is only needed if mqtt or web server are running
     let is_poll_needed = config.start_http || config.mqtt_buffer;
@@ -653,18 +661,47 @@ async fn run_daemon(config: &ILConfig) {
         }
     }
 
+    let mut kafka_job = None;
     if config.kafka_brokers.is_some() {
         info!("Running Kafka thread..");
         let cloned_ctx = daemon_ctx.clone();
-        tokio::spawn(async move {
+        kafka_job = Some(tokio::spawn(async move {
             consumers::kafka::run_kafka_job(cloned_ctx).await;
-        });
+        }));
     }
 
     if config.start_http {
-        http_server::run_server(daemon_ctx.clone()).await;
-        // blocking...
-        debug!("http ended");
+        let http_ctx = daemon_ctx.clone();
+        let http_handle = tokio::spawn(async move {
+            http_server::run_server(http_ctx).await;
+        });
+
+        // Supervise required consumer workers while HTTP is running.
+        // If a consumer exits unexpectedly, initiate shutdown.
+        tokio::select! {
+            _ = http_handle => {
+                debug!("http ended");
+            }
+            result = async { mqtt_job.as_mut().unwrap().await }, if mqtt_job.is_some() => {
+                if daemon_ctx.running.load(Ordering::Relaxed) {
+                    error!("MQTT worker exited unexpectedly, initiating shutdown");
+                }
+                if let Err(e) = result {
+                    error!("MQTT worker panicked: {:?}", e);
+                }
+                mqtt_job = None;
+            }
+            result = async { kafka_job.as_mut().unwrap().await }, if kafka_job.is_some() => {
+                if daemon_ctx.running.load(Ordering::Relaxed) {
+                    error!("Kafka worker exited unexpectedly, initiating shutdown");
+                }
+                if let Err(e) = result {
+                    error!("Kafka worker panicked: {:?}", e);
+                }
+                kafka_job = None;
+            }
+        }
+
         daemon_ctx.running.store(false, Ordering::Relaxed);
     }
 
@@ -689,11 +726,10 @@ async fn run_daemon(config: &ILConfig) {
         debug!("mqtt ended");
     }
 
-    /* as soon as actix or ctrcl_handler is used the kafka streaming consumer will not shut down
     if let Some(handle) = kafka_job {
         handle.await.expect("Failed to join kafka thread");
-        info!("kafka ended");
-    } */
+        debug!("kafka ended");
+    }
 }
 
 #[cfg(test)]
@@ -1007,7 +1043,7 @@ mod tests {
     // --- build_daemon_config: Kafka ---
 
     #[test]
-    fn daemon_config_kafka_enables_http() {
+    fn daemon_config_kafka_does_not_force_http() {
         let m = build_cli()
             .try_get_matches_from(vec![
                 "ilagent",
@@ -1020,7 +1056,7 @@ mod tests {
         let config = build_daemon_config(sub, &m);
         assert_eq!(config.kafka_brokers.unwrap(), "localhost:9092");
         assert_eq!(config.kafka_group_id.unwrap(), "ilagent");
-        assert!(config.start_http, "kafka should force http on");
+        assert!(!config.start_http, "kafka should not force http on");
     }
 
     #[test]

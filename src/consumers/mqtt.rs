@@ -4,8 +4,8 @@ use crate::models::event::EventQueueItemJson;
 use crate::{DaemonContext, hbt};
 use log::{error, info, warn};
 use rumqttc::{
-    Client, Event, Incoming, MqttOptions, Publish, QoS, RecvTimeoutError, TlsConfiguration,
-    Transport,
+    Client, Event, Incoming, MqttOptions, Publish, QoS, RecvTimeoutError, SubscribeReasonCode,
+    TlsConfiguration, Transport,
 };
 use rustls::RootCertStore;
 use serde_json::json;
@@ -99,6 +99,10 @@ fn configured_mqtt_topics(config: &ILConfig) -> Vec<&str> {
 
 fn describe_mqtt_topics(config: &ILConfig) -> String {
     configured_mqtt_topics(config).join(", ")
+}
+
+pub fn configured_topic_count(config: &ILConfig) -> u32 {
+    configured_mqtt_topics(config).len() as u32
 }
 
 fn has_configured_mqtt_topics(config: &ILConfig) -> bool {
@@ -290,6 +294,10 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
     }
 
     loop {
+        if let Some(ref probe) = daemon_ctx.mqtt_probe {
+            probe.reset();
+        }
+
         let mut mqtt_options = MqttOptions::new(mqtt_name.as_str(), mqtt_host.as_str(), mqtt_port);
 
         mqtt_options
@@ -437,23 +445,46 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 Ok(event) => event,
                 Err(e) => {
                     error!("mqtt error {:?}", e);
+                    if let Some(ref probe) = daemon_ctx.mqtt_probe {
+                        probe.record_error(format!("{:?}", e));
+                    }
                     break;
                 }
             };
 
-            if !connected {
-                connected = true;
-                if let Some(fp) = attempt_tls_fp {
-                    active_tls_fp = Some(fp);
-                }
-                info!(
-                    "Connected to mqtt server {}:{}",
-                    mqtt_host.as_str(),
-                    mqtt_port
-                );
-            }
-
             match event {
+                Event::Incoming(Incoming::ConnAck(_)) => {
+                    if !connected {
+                        connected = true;
+                        if let Some(fp) = attempt_tls_fp {
+                            active_tls_fp = Some(fp);
+                        }
+                        info!(
+                            "Connected to mqtt server {}:{}",
+                            mqtt_host.as_str(),
+                            mqtt_port
+                        );
+                    }
+                    if let Some(ref probe) = daemon_ctx.mqtt_probe {
+                        probe.set_connected();
+                    }
+                }
+                Event::Incoming(Incoming::SubAck(suback)) => {
+                    if let Some(ref probe) = daemon_ctx.mqtt_probe {
+                        let has_failure = suback
+                            .return_codes
+                            .iter()
+                            .any(|rc| matches!(rc, SubscribeReasonCode::Failure));
+                        if has_failure {
+                            let err =
+                                format!("Subscription rejected: {:?}", suback.return_codes);
+                            error!("MQTT {}", err);
+                            probe.record_error(err);
+                        } else {
+                            probe.record_suback_success();
+                        }
+                    }
+                }
                 Event::Incoming(Incoming::Publish(message)) => {
                     recon_attempts = 0;
 

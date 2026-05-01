@@ -3,6 +3,7 @@ use log::{error, info};
 use serde_json::json;
 use std::convert::TryInto;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use tokio::sync::Mutex;
 
 use ilert::ilert::ILert;
@@ -23,11 +24,61 @@ async fn get_index(_req: HttpRequest) -> impl Responder {
         .body(format!("ilagent/{}", env!("CARGO_PKG_VERSION")))
 }
 
-async fn get_ready(_req: HttpRequest) -> impl Responder {
+async fn get_ready(
+    daemon_ctx: Option<web::Data<Arc<DaemonContext>>>,
+    _req: HttpRequest,
+) -> impl Responder {
+    let Some(ctx) = daemon_ctx else {
+        return HttpResponse::NoContent().finish();
+    };
+
+    if !ctx.running.load(Ordering::Relaxed) {
+        return HttpResponse::ServiceUnavailable()
+            .json(json!({"component": "daemon", "error": "shutting down"}));
+    }
+
+    if let Some(ref probe) = ctx.mqtt_probe {
+        if !probe.is_ready() {
+            let error = probe.last_error().unwrap_or_default();
+            let connected = probe.connected.load(Ordering::Relaxed);
+            let subs_ready = probe.subscriptions_ready.load(Ordering::Relaxed);
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "component": "mqtt",
+                "connected": connected,
+                "subscriptions_ready": subs_ready,
+                "error": error,
+            }));
+        }
+    }
+
+    if let Some(ref probe) = ctx.kafka_probe {
+        if !probe.is_ready() {
+            let error = probe.last_error().unwrap_or_default();
+            let consumer_started = probe.consumer_started.load(Ordering::Relaxed);
+            let subscribed = probe.subscribed.load(Ordering::Relaxed);
+            let worker_exited = probe.worker_exited.load(Ordering::Relaxed);
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "component": "kafka",
+                "consumer_started": consumer_started,
+                "subscribed": subscribed,
+                "worker_exited": worker_exited,
+                "error": error,
+            }));
+        }
+    }
+
     HttpResponse::NoContent().finish()
 }
 
-async fn get_health(_req: HttpRequest) -> impl Responder {
+async fn get_health(
+    daemon_ctx: Option<web::Data<Arc<DaemonContext>>>,
+    _req: HttpRequest,
+) -> impl Responder {
+    if let Some(ctx) = daemon_ctx {
+        if !ctx.running.load(Ordering::Relaxed) {
+            return HttpResponse::ServiceUnavailable().finish();
+        }
+    }
     HttpResponse::NoContent().finish()
 }
 
@@ -125,9 +176,11 @@ pub async fn run_server(daemon_ctx: Arc<DaemonContext>) -> () {
     let ilert_client = ILert::new().expect("failed to create ilert client");
     info!("Starting HTTP server @ {}", addr);
     let container = web::Data::new(Mutex::new(WebContextContainer { db, ilert_client }));
+    let daemon_data = web::Data::new(daemon_ctx.clone());
     let server = HttpServer::new(move || {
         App::new()
             .app_data(container.clone())
+            .app_data(daemon_data.clone())
             .wrap(middleware::Logger::default())
             .app_data(web::JsonConfig::default().limit(16000))
             .configure(config_app)

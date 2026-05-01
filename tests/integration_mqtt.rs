@@ -55,6 +55,8 @@ fn mqtt_daemon_ctx(
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     })
 }
 
@@ -485,6 +487,8 @@ async fn mqtt_event_e2e_with_poll() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -591,6 +595,8 @@ async fn mqtt_policy_buffer_drain() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -677,6 +683,8 @@ async fn mqtt_policy_buffer_retry_on_failure() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -754,6 +762,8 @@ async fn mqtt_policy_buffer_filtered_dropped() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -835,6 +845,8 @@ async fn mqtt_policy_buffer_max_retries_drops_message() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -914,6 +926,8 @@ async fn mqtt_policy_buffer_unlimited_retries_keeps_message() {
         db: Mutex::new(db),
         ilert_client,
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let ctx_clone = daemon_ctx.clone();
@@ -984,6 +998,8 @@ async fn mqtt_event_forward_payload_with_nested_mapping() {
         db: Mutex::new(db),
         ilert_client: ILert::new().unwrap(),
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -1092,6 +1108,8 @@ async fn mqtt_event_with_config_mappings() {
         db: Mutex::new(db),
         ilert_client: ILert::new().unwrap(),
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -1163,6 +1181,8 @@ async fn mqtt_buffered_event_moves_from_mqtt_queue_to_event_items() {
         db: Mutex::new(db),
         ilert_client: ILert::new().unwrap(),
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();
@@ -1215,6 +1235,8 @@ async fn mqtt_buffered_event_db_failure_keeps_mqtt_queue_item() {
         db: Mutex::new(db),
         ilert_client: ILert::new().unwrap(),
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();
@@ -1259,6 +1281,8 @@ async fn mqtt_buffered_event_invalid_payload_dropped_from_mqtt_queue() {
         db: Mutex::new(db),
         ilert_client: ILert::new().unwrap(),
         running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();

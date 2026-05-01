@@ -1,5 +1,6 @@
 use log::{debug, error, info, warn};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::{DaemonContext, hbt, poll};
@@ -70,90 +71,136 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
         .expect("no group id");
 
     let context = CustomContext;
-    let consumer: LoggingConsumer = ClientConfig::new()
+    let consumer: LoggingConsumer = match ClientConfig::new()
         .set("group.id", group_id)
         .set("bootstrap.servers", brokers)
         .set("enable.partition.eof", "false")
         .set("session.timeout.ms", "6000")
         .set("enable.auto.commit", "false")
-        //.set("statistics.interval.ms", "30000")
-        //.set("auto.offset.reset", "smallest")
         .set_log_level(RDKafkaLogLevel::Debug)
         .create_with_context(context)
-        .expect("Consumer creation failed");
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Consumer creation failed: {}", e);
+            error!("{}", msg);
+            if let Some(ref probe) = daemon_ctx.kafka_probe {
+                probe.record_error(msg);
+                probe.worker_exited.store(true, Ordering::Relaxed);
+            }
+            return;
+        }
+    };
 
-    consumer
-        .subscribe(&topics)
-        .expect("Can't subscribe to specified topics");
+    if let Some(ref probe) = daemon_ctx.kafka_probe {
+        probe.consumer_started.store(true, Ordering::Relaxed);
+    }
+
+    if let Err(e) = consumer.subscribe(&topics) {
+        let msg = format!("Can't subscribe to specified topics: {}", e);
+        error!("{}", msg);
+        if let Some(ref probe) = daemon_ctx.kafka_probe {
+            probe.record_error(msg);
+            probe.worker_exited.store(true, Ordering::Relaxed);
+        }
+        return;
+    }
+
+    if let Some(ref probe) = daemon_ctx.kafka_probe {
+        probe.subscribed.store(true, Ordering::Relaxed);
+    }
 
     loop {
-        match consumer.recv().await {
-            Err(e) => warn!("Kafka error: {}", e),
-            Ok(m) => {
-                let payload = match m.payload_view::<str>() {
-                    None => "",
-                    Some(Ok(s)) => s,
-                    Some(Err(e)) => {
-                        warn!("Error while deserializing message payload: {:?}", e);
-                        ""
+        if !daemon_ctx.running.load(Ordering::Relaxed) {
+            info!("Kafka consumer shutting down");
+            break;
+        }
+
+        let m = tokio::select! {
+            result = consumer.recv() => {
+                match result {
+                    Err(e) => {
+                        warn!("Kafka error: {}", e);
+                        if let Some(ref probe) = daemon_ctx.kafka_probe {
+                            probe.record_error(format!("{}", e));
+                        }
+                        continue;
                     }
-                };
-
-                let message_key = match m.key_view::<str>() {
-                    None => "",
-                    Some(Ok(s)) => s,
-                    Some(Err(e)) => {
-                        warn!("Error while deserializing message key: {:?}", e);
-                        ""
-                    }
-                };
-
-                debug!(
-                    "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                    m.key(),
-                    payload,
-                    m.topic(),
-                    m.partition(),
-                    m.offset(),
-                    m.timestamp()
-                );
-
-                /*
-                if let Some(headers) = m.headers() {
-                    for header in headers.iter() {
-                        info!("  Header {:#?}: {:?}", header.key, header.value);
-                    }
-                } */
-
-                let should_retry: bool = if m.topic().eq(event_topic.as_str()) {
-                    handle_event_message(daemon_ctx.clone(), message_key, payload, m.topic()).await
-                } else if m.topic().eq(heartbeat_topic.as_str()) {
-                    handle_heartbeat_message(daemon_ctx.clone(), message_key, payload).await
-                } else if !policy_topic.is_empty() && m.topic().eq(policy_topic.as_str()) {
-                    handle_policy_message(daemon_ctx.clone(), payload).await
-                } else {
-                    warn!(
-                        "Received Kafka message from unsubscribed topic: {}",
-                        m.topic()
-                    );
-                    // will commit these anyway
-                    false
-                };
-
-                if !should_retry {
-                    // no need to buffer through SQLite, we can use Kafka's offset to ensure redelivery
-                    consumer
-                        .commit_message(&m, CommitMode::Async)
-                        .expect("failed to commit event message");
-                } else {
-                    error!(
-                        "failed to produce event, did not commit Kafka message offset, will exit in 5 seconds..."
-                    );
-                    tokio::time::sleep(Duration::from_millis(5000)).await;
-                    panic!("failed to produce event, did not commit Kafka message offset");
+                    Ok(m) => m,
                 }
             }
+            _ = shutdown_signal(&daemon_ctx) => {
+                info!("Kafka consumer received shutdown signal");
+                break;
+            }
         };
+
+        let payload = match m.payload_view::<str>() {
+            None => "",
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                warn!("Error while deserializing message payload: {:?}", e);
+                ""
+            }
+        };
+
+        let message_key = match m.key_view::<str>() {
+            None => "",
+            Some(Ok(s)) => s,
+            Some(Err(e)) => {
+                warn!("Error while deserializing message key: {:?}", e);
+                ""
+            }
+        };
+
+        debug!(
+            "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+            m.key(),
+            payload,
+            m.topic(),
+            m.partition(),
+            m.offset(),
+            m.timestamp()
+        );
+
+        let should_retry: bool = if m.topic().eq(event_topic.as_str()) {
+            handle_event_message(daemon_ctx.clone(), message_key, payload, m.topic()).await
+        } else if m.topic().eq(heartbeat_topic.as_str()) {
+            handle_heartbeat_message(daemon_ctx.clone(), message_key, payload).await
+        } else if !policy_topic.is_empty() && m.topic().eq(policy_topic.as_str()) {
+            handle_policy_message(daemon_ctx.clone(), payload).await
+        } else {
+            warn!(
+                "Received Kafka message from unsubscribed topic: {}",
+                m.topic()
+            );
+            false
+        };
+
+        if !should_retry {
+            consumer
+                .commit_message(&m, CommitMode::Async)
+                .expect("failed to commit event message");
+        } else {
+            error!(
+                "failed to produce event, did not commit Kafka message offset, will exit in 5 seconds..."
+            );
+            tokio::time::sleep(Duration::from_millis(5000)).await;
+            panic!("failed to produce event, did not commit Kafka message offset");
+        }
+    }
+
+    if let Some(ref probe) = daemon_ctx.kafka_probe {
+        probe.worker_exited.store(true, Ordering::Relaxed);
+    }
+}
+
+async fn shutdown_signal(daemon_ctx: &Arc<DaemonContext>) {
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        if !daemon_ctx.running.load(Ordering::Relaxed) {
+            return;
+        }
     }
 }
 
