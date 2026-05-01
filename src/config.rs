@@ -49,7 +49,6 @@ pub struct ILConfig {
 }
 
 impl ILConfig {
-
     pub fn new() -> ILConfig {
         ILConfig {
             http_host: "0.0.0.0".to_string(),

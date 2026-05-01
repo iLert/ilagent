@@ -1,7 +1,9 @@
-use log::{info, warn, error, debug};
-use serde_json::Value;
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{UserPostApiResource, EscalationPolicyGetApiResource, EscalationPolicyPutApiResource};
+use ilert::ilert_builders::{
+    EscalationPolicyGetApiResource, EscalationPolicyPutApiResource, UserPostApiResource,
+};
+use log::{debug, error, info, warn};
+use serde_json::Value;
 
 use crate::config::ILConfig;
 use crate::json_util::get_nested_value;
@@ -22,7 +24,10 @@ pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
     if let Some(ref filter_key) = config.filter_key {
         let val_opt = json.get(filter_key);
         if val_opt.is_none() {
-            debug!("Dropping policy message because filter key '{}' is missing", filter_key);
+            debug!(
+                "Dropping policy message because filter key '{}' is missing",
+                filter_key
+            );
             return None;
         }
         if let Some(ref filter_val) = config.filter_val {
@@ -30,12 +35,18 @@ pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
                 match val.as_str() {
                     Some(val_str) => {
                         if !filter_val.eq(val_str) {
-                            debug!("Dropping policy message because filter key value '{}' != '{}'", val_str, filter_val);
+                            debug!(
+                                "Dropping policy message because filter key value '{}' != '{}'",
+                                val_str, filter_val
+                            );
                             return None;
                         }
-                    },
+                    }
                     None => {
-                        warn!("Dropping policy message because filter key value is not a string: {:?}", val);
+                        warn!(
+                            "Dropping policy message because filter key value is not a string: {:?}",
+                            val
+                        );
                         return None;
                     }
                 }
@@ -44,8 +55,13 @@ pub fn parse_policy_payload(config: &ILConfig, payload: &str) -> Option<Value> {
     }
 
     // validate email is present
-    let email_path = config.map_key_email.as_deref().unwrap_or(DEFAULT_EMAIL_PATH);
-    let email = get_nested_value(&json, email_path).and_then(|v| v.as_str()).filter(|e| !e.is_empty());
+    let email_path = config
+        .map_key_email
+        .as_deref()
+        .unwrap_or(DEFAULT_EMAIL_PATH);
+    let email = get_nested_value(&json, email_path)
+        .and_then(|v| v.as_str())
+        .filter(|e| !e.is_empty());
     if email.is_none() {
         warn!("Policy message missing email at '{}'", email_path);
         return None;
@@ -61,25 +77,41 @@ pub fn extract_routing_key(config: &ILConfig, json: &Value) -> Option<String> {
         .split(',')
         .filter_map(|field| {
             let field = field.trim();
-            json.get(field).and_then(|v| v.as_str()).filter(|s| !s.is_empty())
+            json.get(field)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
         })
         .collect::<Vec<_>>()
         .join("");
 
-    if combined.is_empty() { None } else { Some(combined) }
+    if combined.is_empty() {
+        None
+    } else {
+        Some(combined)
+    }
 }
 
 pub fn extract_shift(config: &ILConfig, json: &Value) -> u64 {
-    let shift_path = config.map_key_shift.as_deref().unwrap_or(DEFAULT_SHIFT_PATH);
+    let shift_path = config
+        .map_key_shift
+        .as_deref()
+        .unwrap_or(DEFAULT_SHIFT_PATH);
     let raw = get_nested_value(json, shift_path)
-        .and_then(|v| v.as_str().and_then(|s| s.parse::<i64>().ok()).or_else(|| v.as_i64()))
+        .and_then(|v| {
+            v.as_str()
+                .and_then(|s| s.parse::<i64>().ok())
+                .or_else(|| v.as_i64())
+        })
         .unwrap_or(0);
     let adjusted = raw + config.shift_offset;
     if adjusted < 0 { 0 } else { adjusted as u64 }
 }
 
 pub fn extract_email<'a>(config: &ILConfig, json: &'a Value) -> Option<&'a str> {
-    let email_path = config.map_key_email.as_deref().unwrap_or(DEFAULT_EMAIL_PATH);
+    let email_path = config
+        .map_key_email
+        .as_deref()
+        .unwrap_or(DEFAULT_EMAIL_PATH);
     get_nested_value(json, email_path)
         .and_then(|v| v.as_str())
         .filter(|e| !e.is_empty())
@@ -90,17 +122,28 @@ fn is_retryable_status(status: u16) -> bool {
 }
 
 async fn resolve_escalation_policy(ilert_client: &ILert, routing_key: &str) -> Result<Value, u16> {
-    let result = match ilert_client.get().escalation_policy_resolve(routing_key).execute().await {
+    let result = match ilert_client
+        .get()
+        .escalation_policy_resolve(routing_key)
+        .execute()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to resolve escalation policy for routing key '{}': {}", routing_key, e);
+            error!(
+                "Failed to resolve escalation policy for routing key '{}': {}",
+                routing_key, e
+            );
             return Err(0); // network error, treat as retryable
         }
     };
 
     let status = result.status.as_u16();
     if status != 200 {
-        warn!("Resolve escalation policy for '{}' returned status {}", routing_key, status);
+        warn!(
+            "Resolve escalation policy for '{}' returned status {}",
+            routing_key, status
+        );
         return Err(status);
     }
 
@@ -108,7 +151,12 @@ async fn resolve_escalation_policy(ilert_client: &ILert, routing_key: &str) -> R
 }
 
 async fn resolve_user_by_email(ilert_client: &ILert, email: &str) -> Result<Value, u16> {
-    let result = match ilert_client.create().user_search_email(email).execute().await {
+    let result = match ilert_client
+        .create()
+        .user_search_email(email)
+        .execute()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             error!("Failed to resolve user by email '{}': {}", email, e);
@@ -125,22 +173,43 @@ async fn resolve_user_by_email(ilert_client: &ILert, email: &str) -> Result<Valu
     result.body_json.ok_or(0)
 }
 
-async fn update_policy_level(ilert_client: &ILert, policy_id: i64, shift: u64, user: &Value) -> Result<(), u16> {
-    let result = match ilert_client.update().escalation_policy_level_raw(policy_id, shift as i32, user).execute().await {
+async fn update_policy_level(
+    ilert_client: &ILert,
+    policy_id: i64,
+    shift: u64,
+    user: &Value,
+) -> Result<(), u16> {
+    let result = match ilert_client
+        .update()
+        .escalation_policy_level_raw(policy_id, shift as i32, user)
+        .execute()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to update policy {} level {}: {}", policy_id, shift, e);
+            error!(
+                "Failed to update policy {} level {}: {}",
+                policy_id, shift, e
+            );
             return Err(0); // network error, treat as retryable
         }
     };
 
     let status = result.status.as_u16();
     if status == 200 {
-        info!("Successfully updated escalation policy {} level {} with user", policy_id, shift);
+        info!(
+            "Successfully updated escalation policy {} level {} with user",
+            policy_id, shift
+        );
         Ok(())
     } else {
-        warn!("Update policy {} level {} returned status {}: {}", policy_id, shift, status,
-            result.body_raw.unwrap_or_else(|| "no body".to_string()));
+        warn!(
+            "Update policy {} level {} returned status {}: {}",
+            policy_id,
+            shift,
+            status,
+            result.body_raw.unwrap_or_else(|| "no body".to_string())
+        );
         Err(status)
     }
 }
@@ -164,7 +233,10 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
         }
     };
 
-    debug!("Policy update: email={}, shift={}, routing_key={}", email, shift, routing_key);
+    debug!(
+        "Policy update: email={}, shift={}, routing_key={}",
+        email, shift, routing_key
+    );
 
     // resolve user
     let user = match resolve_user_by_email(ilert_client, &email).await {
@@ -178,7 +250,10 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
     let user_id = match user.get("id").and_then(|v| v.as_i64()) {
         Some(id) => id,
         None => {
-            error!("User resolve response missing 'id' field for email '{}'", email);
+            error!(
+                "User resolve response missing 'id' field for email '{}'",
+                email
+            );
             return false;
         }
     };
@@ -187,7 +262,10 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
     let policy = match resolve_escalation_policy(ilert_client, &routing_key).await {
         Ok(p) => p,
         Err(status) => {
-            warn!("Could not resolve escalation policy for routing key '{}'", routing_key);
+            warn!(
+                "Could not resolve escalation policy for routing key '{}'",
+                routing_key
+            );
             return is_retryable_status(status);
         }
     };
@@ -195,13 +273,17 @@ pub async fn handle_policy_update(ilert_client: &ILert, config: &ILConfig, paylo
     let policy_id = match policy.get("id").and_then(|v| v.as_i64()) {
         Some(id) => id,
         None => {
-            error!("Escalation policy response missing 'id' field for routing key '{}'", routing_key);
+            error!(
+                "Escalation policy response missing 'id' field for routing key '{}'",
+                routing_key
+            );
             return false;
         }
     };
 
     // get current escalation timeout from the target level if available
-    let escalation_timeout = policy.get("escalationRules")
+    let escalation_timeout = policy
+        .get("escalationRules")
         .and_then(|rules| rules.as_array())
         .and_then(|rules| rules.get(shift as usize))
         .and_then(|rule| rule.get("escalationTimeout"))
@@ -242,13 +324,25 @@ mod tests {
     #[test]
     fn nested_value_single_key() {
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        assert_eq!(get_nested_value(&json, "location").unwrap().as_str().unwrap(), "powerplant");
+        assert_eq!(
+            get_nested_value(&json, "location")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "powerplant"
+        );
     }
 
     #[test]
     fn nested_value_dot_path() {
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        assert_eq!(get_nested_value(&json, "data.email").unwrap().as_str().unwrap(), "support@ilert.com");
+        assert_eq!(
+            get_nested_value(&json, "data.email")
+                .unwrap()
+                .as_str()
+                .unwrap(),
+            "support@ilert.com"
+        );
     }
 
     #[test]
@@ -387,7 +481,10 @@ mod tests {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location,slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
+        assert_eq!(
+            extract_routing_key(&config, &json).unwrap(),
+            "powerplantthree50"
+        );
     }
 
     #[test]
@@ -395,7 +492,10 @@ mod tests {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location , slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
+        assert_eq!(
+            extract_routing_key(&config, &json).unwrap(),
+            "powerplantthree50"
+        );
     }
 
     #[test]
@@ -403,7 +503,10 @@ mod tests {
         let mut config = ILConfig::new();
         config.policy_routing_keys = Some("location,nonexistent,slot".to_string());
         let json: Value = serde_json::from_str(SAMPLE_PAYLOAD).unwrap();
-        assert_eq!(extract_routing_key(&config, &json).unwrap(), "powerplantthree50");
+        assert_eq!(
+            extract_routing_key(&config, &json).unwrap(),
+            "powerplantthree50"
+        );
     }
 
     #[test]
@@ -452,7 +555,10 @@ mod tests {
         config.filter_key = Some("eventType".to_string());
         config.filter_val = Some("active".to_string());
         let payload = r#"{"eventType": 123, "data": {"email": "test@ilert.com"}}"#;
-        assert!(parse_policy_payload(&config, payload).is_none(), "non-string filter value should be rejected");
+        assert!(
+            parse_policy_payload(&config, payload).is_none(),
+            "non-string filter value should be rejected"
+        );
     }
 
     // --- error cases ---

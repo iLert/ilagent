@@ -1,7 +1,7 @@
 use ilert::ilert::ILert;
-use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path, query_param, body_json};
 use serde_json::json;
+use wiremock::matchers::{body_json, method, path, query_param};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use ilagent::config::ILConfig;
 use ilagent::consumers::policy::handle_policy_update;
@@ -52,13 +52,16 @@ async fn policy_update_single_routing_key() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/42/levels/1"))
-        .and(body_json(json!({"escalationTimeout": 5, "users": [{"id": 99}]})))
+        .and(body_json(
+            json!({"escalationTimeout": 5, "users": [{"id": 99}]}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -91,20 +94,26 @@ async fn policy_update_multiple_routing_keys_concatenated() {
 
     Mock::given(method("POST"))
         .and(path("/api/users/search-email"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 99, "email": "support@ilert.com"})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"id": 99, "email": "support@ilert.com"})),
+        )
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/10/levels/1"))
-        .and(body_json(json!({"escalationTimeout": 3, "users": [{"id": 99}]})))
+        .and(body_json(
+            json!({"escalationTimeout": 3, "users": [{"id": 99}]}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -139,20 +148,25 @@ async fn policy_update_shift_defaults_to_zero() {
 
     Mock::given(method("POST"))
         .and(path("/api/users/search-email"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 1, "email": "test@ilert.com"})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"id": 1, "email": "test@ilert.com"})),
+        )
         .expect(1)
         .mount(&mock_server)
         .await;
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/5/levels/0"))
-        .and(body_json(json!({"escalationTimeout": 0, "users": [{"id": 1}]})))
+        .and(body_json(
+            json!({"escalationTimeout": 0, "users": [{"id": 1}]}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -199,13 +213,16 @@ async fn policy_update_with_custom_field_paths() {
 
     Mock::given(method("PUT"))
         .and(path("/api/escalation-policies/7/levels/2"))
-        .and(body_json(json!({"escalationTimeout": 10, "users": [{"id": 3}]})))
+        .and(body_json(
+            json!({"escalationTimeout": 10, "users": [{"id": 3}]}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
         .expect(1)
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -228,7 +245,8 @@ async fn policy_update_user_resolve_server_error_retries() {
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -249,7 +267,8 @@ async fn policy_update_user_resolve_client_error_no_retry() {
         .mount(&mock_server)
         .await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -263,7 +282,8 @@ async fn policy_update_user_resolve_client_error_no_retry() {
 async fn policy_update_filtered_message_no_api_calls() {
     let mock_server = MockServer::start().await;
 
-    let mut ilert_client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+    let mut ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();

@@ -14,11 +14,10 @@ pub struct EventQueueItem {
     pub images: Option<String>,
     pub links: Option<String>,
     pub custom_details: Option<String>,
-    pub event_api_path: Option<String>
+    pub event_api_path: Option<String>,
 }
 
 impl EventQueueItem {
-
     pub fn new() -> EventQueueItem {
         EventQueueItem {
             id: None,
@@ -32,12 +31,16 @@ impl EventQueueItem {
             images: None,
             links: None,
             custom_details: None,
-            event_api_path: None
+            event_api_path: None,
         }
     }
 
-    pub fn new_with_required(integration_key: &str, event_type: &str, summary: &str,
-                             alert_key: Option<String>) -> EventQueueItem {
+    pub fn new_with_required(
+        integration_key: &str,
+        event_type: &str,
+        summary: &str,
+        alert_key: Option<String>,
+    ) -> EventQueueItem {
         EventQueueItem {
             id: None,
             integration_key: integration_key.to_string(),
@@ -50,7 +53,7 @@ impl EventQueueItem {
             images: None,
             links: None,
             custom_details: None,
-            event_api_path: None
+            event_api_path: None,
         }
     }
 }

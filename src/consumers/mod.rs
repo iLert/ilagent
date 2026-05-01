@@ -5,11 +5,17 @@ pub mod policy;
 use crate::config::ILConfig;
 use crate::models::event::EventQueueItemJson;
 
-pub fn prepare_consumer_event(config: &ILConfig, payload: &str, topic: &str, default_details: serde_json::Value) -> Option<EventQueueItemJson> {
+pub fn prepare_consumer_event(
+    config: &ILConfig,
+    payload: &str,
+    topic: &str,
+    default_details: serde_json::Value,
+) -> Option<EventQueueItemJson> {
     let mut event = EventQueueItemJson::parse_event_json(config, payload, topic)?;
     if event.customDetails.is_none() {
         if config.forward_message_payload {
-            let payload_json: serde_json::Value = serde_json::from_str(payload).unwrap_or(default_details.clone());
+            let payload_json: serde_json::Value =
+                serde_json::from_str(payload).unwrap_or(default_details.clone());
             event.customDetails = Some(payload_json);
         } else {
             event.customDetails = Some(default_details);
@@ -33,7 +39,10 @@ mod tests {
 
     #[test]
     fn build_path_kafka() {
-        assert_eq!(build_event_api_path("kafka", "key1"), "/v1/events/kafka/key1");
+        assert_eq!(
+            build_event_api_path("kafka", "key1"),
+            "/v1/events/kafka/key1"
+        );
     }
 
     #[test]
@@ -74,7 +83,10 @@ mod tests {
         let cd = event.customDetails.unwrap();
         assert_eq!(cd["extra"], "data");
         assert_eq!(cd["nested"]["val"], 42);
-        assert!(cd.get("topic").is_none(), "metadata should not be merged into forwarded payload");
+        assert!(
+            cd.get("topic").is_none(),
+            "metadata should not be merged into forwarded payload"
+        );
     }
 
     #[test]
@@ -86,18 +98,25 @@ mod tests {
         let event = prepare_consumer_event(&config, payload, "t1", details).unwrap();
         let cd = event.customDetails.unwrap();
         assert_eq!(cd["env"], "prod");
-        assert!(cd.get("topic").is_none(), "explicit customDetails should be preserved as-is");
+        assert!(
+            cd.get("topic").is_none(),
+            "explicit customDetails should be preserved as-is"
+        );
     }
 
     #[test]
     fn forward_payload_disabled_uses_default_details() {
         let mut config = ILConfig::new();
         config.forward_message_payload = false;
-        let payload = r#"{"apiKey": "k1", "eventType": "ALERT", "summary": "test", "extra": "data"}"#;
+        let payload =
+            r#"{"apiKey": "k1", "eventType": "ALERT", "summary": "test", "extra": "data"}"#;
         let details = serde_json::json!({"topic": "t1"});
         let event = prepare_consumer_event(&config, payload, "t1", details).unwrap();
         let cd = event.customDetails.unwrap();
         assert_eq!(cd["topic"], "t1");
-        assert!(cd.get("extra").is_none(), "original payload fields should not leak when flag is off");
+        assert!(
+            cd.get("extra").is_none(),
+            "original payload fields should not leak when flag is off"
+        );
     }
 }

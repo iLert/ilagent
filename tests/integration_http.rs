@@ -1,11 +1,11 @@
-use actix_web::{test, web, App};
-use tokio::sync::Mutex;
-use tempfile::NamedTempFile;
-use serde_json::json;
+use actix_web::{App, test, web};
 use ilert::ilert::ILert;
+use serde_json::json;
+use tempfile::NamedTempFile;
+use tokio::sync::Mutex;
 
 use ilagent::db::ILDatabase;
-use ilagent::http_server::{config_app, WebContextContainer};
+use ilagent::http_server::{WebContextContainer, config_app};
 
 fn test_container() -> (web::Data<Mutex<WebContextContainer>>, NamedTempFile) {
     let file = NamedTempFile::new().unwrap();
@@ -21,9 +21,8 @@ fn test_container() -> (web::Data<Mutex<WebContextContainer>>, NamedTempFile) {
 #[actix_rt::test]
 async fn get_index_returns_version() {
     let (container, _f) = test_container();
-    let app = test::init_service(
-        App::new().app_data(container.clone()).configure(config_app)
-    ).await;
+    let app =
+        test::init_service(App::new().app_data(container.clone()).configure(config_app)).await;
 
     let req = test::TestRequest::get().uri("/").to_request();
     let resp = test::call_service(&app, req).await;
@@ -37,9 +36,8 @@ async fn get_index_returns_version() {
 #[actix_rt::test]
 async fn get_ready_returns_204() {
     let (container, _f) = test_container();
-    let app = test::init_service(
-        App::new().app_data(container.clone()).configure(config_app)
-    ).await;
+    let app =
+        test::init_service(App::new().app_data(container.clone()).configure(config_app)).await;
 
     let req = test::TestRequest::get().uri("/ready").to_request();
     let resp = test::call_service(&app, req).await;
@@ -49,9 +47,8 @@ async fn get_ready_returns_204() {
 #[actix_rt::test]
 async fn get_health_returns_204() {
     let (container, _f) = test_container();
-    let app = test::init_service(
-        App::new().app_data(container.clone()).configure(config_app)
-    ).await;
+    let app =
+        test::init_service(App::new().app_data(container.clone()).configure(config_app)).await;
 
     let req = test::TestRequest::get().uri("/health").to_request();
     let resp = test::call_service(&app, req).await;
@@ -67,8 +64,9 @@ async fn post_event_valid_inserts_to_db() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "il1api123",
@@ -105,8 +103,9 @@ async fn post_event_with_all_fields() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "k1",
@@ -140,8 +139,9 @@ async fn post_event_bad_event_type_returns_400() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "k1",
@@ -172,8 +172,9 @@ async fn post_event_bad_priority_returns_400() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let payload = json!({
         "apiKey": "k1",
@@ -197,8 +198,9 @@ async fn post_event_missing_required_fields_returns_400() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     // missing apiKey, eventType, summary
     let req = test::TestRequest::post()
@@ -216,8 +218,9 @@ async fn post_event_not_json_returns_400() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     let req = test::TestRequest::post()
         .uri("/api/events")
@@ -235,8 +238,9 @@ async fn post_multiple_events_all_queued() {
         App::new()
             .app_data(container.clone())
             .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app)
-    ).await;
+            .configure(config_app),
+    )
+    .await;
 
     for i in 0..3 {
         let payload = json!({

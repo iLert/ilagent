@@ -5,11 +5,10 @@ use serde_derive::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HeartbeatJson {
     #[serde(alias = "apiKey")]
-    pub integrationKey: String
+    pub integrationKey: String,
 }
 
 impl HeartbeatJson {
-
     pub fn parse_heartbeat_json(payload: &str) -> Option<HeartbeatJson> {
         let parsed = serde_json::from_str(payload);
         match parsed {

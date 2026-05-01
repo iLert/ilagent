@@ -1,7 +1,10 @@
-use std::time;
-use log::{debug, info, warn, error};
 use ilert::ilert::ILert;
-use ilert::ilert_builders::{AlertGetApiResource, AlertPutApiResource, IncidentGetApiResource, IncidentPutApiResource, BaseRequestResult};
+use ilert::ilert_builders::{
+    AlertGetApiResource, AlertPutApiResource, BaseRequestResult, IncidentGetApiResource,
+    IncidentPutApiResource,
+};
+use log::{debug, error, info, warn};
+use std::time;
 
 const BATCH_SIZE: i32 = 12;
 const REQUEST_DELAY_MS: u64 = 200;
@@ -19,21 +22,33 @@ where
                 let status = result.status.as_u16();
                 if status == 429 {
                     if attempt == MAX_RETRIES {
-                        error!("{} — rate limited after {} retries, giving up", description, MAX_RETRIES);
+                        error!(
+                            "{} — rate limited after {} retries, giving up",
+                            description, MAX_RETRIES
+                        );
                         return None;
                     }
                     let backoff = RETRY_BASE_MS * 2u64.pow(attempt);
-                    warn!("{} — rate limited (429), retrying in {}ms", description, backoff);
+                    warn!(
+                        "{} — rate limited (429), retrying in {}ms",
+                        description, backoff
+                    );
                     tokio::time::sleep(time::Duration::from_millis(backoff)).await;
                     continue;
                 }
                 if status > 499 {
                     if attempt == MAX_RETRIES {
-                        error!("{} — server error {} after {} retries, giving up", description, status, MAX_RETRIES);
+                        error!(
+                            "{} — server error {} after {} retries, giving up",
+                            description, status, MAX_RETRIES
+                        );
                         return None;
                     }
                     let backoff = RETRY_BASE_MS * 2u64.pow(attempt);
-                    warn!("{} — server error {}, retrying in {}ms", description, status, backoff);
+                    warn!(
+                        "{} — server error {}, retrying in {}ms",
+                        description, status, backoff
+                    );
                     tokio::time::sleep(time::Duration::from_millis(backoff)).await;
                     continue;
                 }
@@ -41,11 +56,17 @@ where
             }
             Err(e) => {
                 if attempt == MAX_RETRIES {
-                    error!("{} — network error after {} retries: {}", description, MAX_RETRIES, e);
+                    error!(
+                        "{} — network error after {} retries: {}",
+                        description, MAX_RETRIES, e
+                    );
                     return None;
                 }
                 let backoff = RETRY_BASE_MS * 2u64.pow(attempt);
-                warn!("{} — network error: {}, retrying in {}ms", description, e, backoff);
+                warn!(
+                    "{} — network error: {}, retrying in {}ms",
+                    description, e, backoff
+                );
                 tokio::time::sleep(time::Duration::from_millis(backoff)).await;
             }
         }
@@ -81,7 +102,6 @@ fn check_alert_responders(alert: &serde_json::Value, responder_ids: &[&str]) -> 
 }
 
 pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
-
     if responders.is_empty() {
         info!("Resolving all PENDING and ACCEPTED alerts...");
     } else {
@@ -92,10 +112,8 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
     let mut resolved_alerts_count = 0;
     let mut skipped_alerts_count = 0;
     loop {
-
-        let fetch_result = execute_with_retry(
-            &format!("Fetch alerts (offset {})", index),
-            || async {
+        let fetch_result =
+            execute_with_retry(&format!("Fetch alerts (offset {})", index), || async {
                 let mut request = ilert_client
                     .get()
                     .skip(index)
@@ -108,13 +126,16 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
                 }
 
                 request.alerts().execute().await
-            },
-        ).await;
+            })
+            .await;
 
         let alerts = match fetch_result {
             Some(result) if result.status.as_u16() == 200 => result,
             Some(result) => {
-                error!("Failed to fetch alerts: {}, {:?}", result.status, result.body_raw);
+                error!(
+                    "Failed to fetch alerts: {}, {:?}",
+                    result.status, result.body_raw
+                );
                 break;
             }
             None => break,
@@ -133,7 +154,6 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
         }
 
         for alert in alerts.iter() {
-
             let alert_id = alert
                 .get("id")
                 .expect("Failed to get alert item")
@@ -142,17 +162,26 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
 
             if !responders.is_empty() {
                 match check_alert_responders(alert, responders) {
-                    ResponderCheck::Confirmed => {},
+                    ResponderCheck::Confirmed => {}
                     ResponderCheck::NotFound => {
-                        warn!("Skipping alert {} — responder not found in alert's responders list", alert_id);
+                        warn!(
+                            "Skipping alert {} — responder not found in alert's responders list",
+                            alert_id
+                        );
                         skipped_alerts_count += 1;
                         continue;
-                    },
+                    }
                     ResponderCheck::FieldMissing => {
-                        error!("Aborting — alert {} has no 'responders' field in API response, cannot safely verify ownership", alert_id);
-                        info!("Resolved a total of {} alerts before aborting", resolved_alerts_count);
+                        error!(
+                            "Aborting — alert {} has no 'responders' field in API response, cannot safely verify ownership",
+                            alert_id
+                        );
+                        info!(
+                            "Resolved a total of {} alerts before aborting",
+                            resolved_alerts_count
+                        );
                         return;
-                    },
+                    }
                 }
             }
 
@@ -163,14 +192,18 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
                     .resolve_alert(alert_id)
                     .execute()
                     .await
-            }).await;
+            })
+            .await;
 
             match resolve_result {
                 Some(result) if result.status.as_u16() == 200 => {
                     debug!("Resolved alert {}", alert_id);
                     resolved_alerts_count += 1;
                 }
-                Some(result) => error!("Failed to resolve alert {}: status {}", alert_id, result.status),
+                Some(result) => error!(
+                    "Failed to resolve alert {}: status {}",
+                    alert_id, result.status
+                ),
                 None => error!("Failed to resolve alert {} after retries", alert_id),
             }
 
@@ -182,22 +215,22 @@ pub async fn cleanup_alerts(ilert_client: &ILert, responders: &[&str]) -> () {
     }
 
     if skipped_alerts_count > 0 {
-        warn!("Skipped {} alerts that did not match the responder filter client-side", skipped_alerts_count);
+        warn!(
+            "Skipped {} alerts that did not match the responder filter client-side",
+            skipped_alerts_count
+        );
     }
     warn!("Resolved a total of {} alerts", resolved_alerts_count);
     ()
 }
 
 pub async fn cleanup_incidents(ilert_client: &ILert) -> () {
-
     info!("Resolving all non-resolved incidents...");
     let mut index = 0;
     let mut resolved_incidents_count = 0;
     loop {
-
-        let fetch_result = execute_with_retry(
-            &format!("Fetch incidents (offset {})", index),
-            || async {
+        let fetch_result =
+            execute_with_retry(&format!("Fetch incidents (offset {})", index), || async {
                 ilert_client
                     .get()
                     .skip(index)
@@ -208,13 +241,16 @@ pub async fn cleanup_incidents(ilert_client: &ILert) -> () {
                     .incidents()
                     .execute()
                     .await
-            },
-        ).await;
+            })
+            .await;
 
         let incidents = match fetch_result {
             Some(result) if result.status.as_u16() == 200 => result,
             Some(result) => {
-                error!("Failed to fetch incidents: {}, {:?}", result.status, result.body_raw);
+                error!(
+                    "Failed to fetch incidents: {}, {:?}",
+                    result.status, result.body_raw
+                );
                 break;
             }
             None => break,
@@ -233,7 +269,6 @@ pub async fn cleanup_incidents(ilert_client: &ILert) -> () {
         }
 
         for incident in incidents.iter() {
-
             let incident_id = incident
                 .get("id")
                 .expect("Failed to get incident item")
@@ -251,14 +286,18 @@ pub async fn cleanup_incidents(ilert_client: &ILert) -> () {
                     .incident_raw(incident_id, &resolve_body)
                     .execute()
                     .await
-            }).await;
+            })
+            .await;
 
             match resolve_result {
                 Some(result) if result.status.as_u16() == 200 => {
                     debug!("Resolved incident {}", incident_id);
                     resolved_incidents_count += 1;
                 }
-                Some(result) => error!("Failed to resolve incident {}: status {}", incident_id, result.status),
+                Some(result) => error!(
+                    "Failed to resolve incident {}: status {}",
+                    incident_id, result.status
+                ),
                 None => error!("Failed to resolve incident {} after retries", incident_id),
             }
 

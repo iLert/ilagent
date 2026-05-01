@@ -1,17 +1,17 @@
+use log::{debug, error, info, warn};
 use std::sync::Arc;
 use std::time::Duration;
-use log::{debug, error, info, warn};
 
+use crate::{DaemonContext, hbt, poll};
 use rdkafka::client::ClientContext;
 use rdkafka::config::{ClientConfig, RDKafkaLogLevel};
 use rdkafka::consumer::stream_consumer::StreamConsumer;
 use rdkafka::consumer::{BaseConsumer, CommitMode, Consumer, ConsumerContext, Rebalance};
 use rdkafka::error::KafkaResult;
-use rdkafka::message::{Message};
+use rdkafka::message::Message;
 use rdkafka::topic_partition_list::TopicPartitionList;
 use rdkafka::util::get_rdkafka_version;
 use serde_json::json;
-use crate::{hbt, poll, DaemonContext};
 
 struct CustomContext;
 
@@ -34,7 +34,6 @@ impl ConsumerContext for CustomContext {
 type LoggingConsumer = StreamConsumer<CustomContext>;
 
 pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
-
     let (version_n, version_s) = get_rdkafka_version();
     info!("rd_kafka_version: 0x{:08x}, {}", version_n, version_s);
 
@@ -64,7 +63,11 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
     }
 
     let brokers = daemon_ctx.config.clone().kafka_brokers.expect("no broker");
-    let group_id = daemon_ctx.config.clone().kafka_group_id.expect("no group id");
+    let group_id = daemon_ctx
+        .config
+        .clone()
+        .kafka_group_id
+        .expect("no group id");
 
     let context = CustomContext;
     let consumer: LoggingConsumer = ClientConfig::new()
@@ -87,7 +90,6 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
         match consumer.recv().await {
             Err(e) => warn!("Kafka error: {}", e),
             Ok(m) => {
-
                 let payload = match m.payload_view::<str>() {
                     None => "",
                     Some(Ok(s)) => s,
@@ -106,8 +108,15 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
                     }
                 };
 
-                debug!("key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
-                      m.key(), payload, m.topic(), m.partition(), m.offset(), m.timestamp());
+                debug!(
+                    "key: '{:?}', payload: '{}', topic: {}, partition: {}, offset: {}, timestamp: {:?}",
+                    m.key(),
+                    payload,
+                    m.topic(),
+                    m.partition(),
+                    m.offset(),
+                    m.timestamp()
+                );
 
                 /*
                 if let Some(headers) = m.headers() {
@@ -123,16 +132,23 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
                 } else if !policy_topic.is_empty() && m.topic().eq(policy_topic.as_str()) {
                     handle_policy_message(daemon_ctx.clone(), payload).await
                 } else {
-                    warn!("Received Kafka message from unsubscribed topic: {}", m.topic());
+                    warn!(
+                        "Received Kafka message from unsubscribed topic: {}",
+                        m.topic()
+                    );
                     // will commit these anyway
                     false
                 };
 
                 if !should_retry {
                     // no need to buffer through SQLite, we can use Kafka's offset to ensure redelivery
-                    consumer.commit_message(&m, CommitMode::Async).expect("failed to commit event message");
+                    consumer
+                        .commit_message(&m, CommitMode::Async)
+                        .expect("failed to commit event message");
                 } else {
-                    error!("failed to produce event, did not commit Kafka message offset, will exit in 5 seconds...");
+                    error!(
+                        "failed to produce event, did not commit Kafka message offset, will exit in 5 seconds..."
+                    );
                     tokio::time::sleep(Duration::from_millis(5000)).await;
                     panic!("failed to produce event, did not commit Kafka message offset");
                 }
@@ -142,27 +158,52 @@ pub async fn run_kafka_job(daemon_ctx: Arc<DaemonContext>) -> () {
 }
 
 async fn handle_policy_message(daemon_context: Arc<DaemonContext>, payload: &str) -> bool {
-    super::policy::handle_policy_update(&daemon_context.ilert_client, &daemon_context.config, payload).await
+    super::policy::handle_policy_update(
+        &daemon_context.ilert_client,
+        &daemon_context.config,
+        payload,
+    )
+    .await
 }
 
-async fn handle_heartbeat_message(daemon_context: Arc<DaemonContext>, _key: &str, payload: &str) -> bool {
+async fn handle_heartbeat_message(
+    daemon_context: Arc<DaemonContext>,
+    _key: &str,
+    payload: &str,
+) -> bool {
     let parsed = crate::models::heartbeat::HeartbeatJson::parse_heartbeat_json(payload);
     if let Some(heartbeat) = parsed {
-        if hbt::ping_heartbeat(&daemon_context.ilert_client, heartbeat.integrationKey.as_str()).await {
-            info!("Heartbeat {} pinged, triggered by kafka message", heartbeat.integrationKey.as_str());
+        if hbt::ping_heartbeat(
+            &daemon_context.ilert_client,
+            heartbeat.integrationKey.as_str(),
+        )
+        .await
+        {
+            info!(
+                "Heartbeat {} pinged, triggered by kafka message",
+                heartbeat.integrationKey.as_str()
+            );
         }
     }
 
     false
 }
 
-async fn handle_event_message(daemon_context: Arc<DaemonContext>, key: &str, payload: &str, topic: &str) -> bool {
+async fn handle_event_message(
+    daemon_context: Arc<DaemonContext>,
+    key: &str,
+    payload: &str,
+    topic: &str,
+) -> bool {
     let default_details = json!({"messageKey": key, "topic": topic});
-    let parsed = super::prepare_consumer_event(&daemon_context.config, payload, topic, default_details);
+    let parsed =
+        super::prepare_consumer_event(&daemon_context.config, payload, topic, default_details);
     if let Some(event) = parsed {
         let event_api_path = super::build_event_api_path("kafka", &event.integrationKey);
-        let db_event_format = crate::models::event::EventQueueItemJson::to_db(event, Some(event_api_path));
-        let should_retry = poll::send_queued_event(&daemon_context.ilert_client, &db_event_format).await;
+        let db_event_format =
+            crate::models::event::EventQueueItemJson::to_db(event, Some(event_api_path));
+        let should_retry =
+            poll::send_queued_event(&daemon_context.ilert_client, &db_event_format).await;
         should_retry
     } else {
         false
