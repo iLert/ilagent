@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::DaemonContext;
-use crate::consumers::mqtt::{MessageType, classify_configured_message};
+use crate::consumers::mqtt::{EnqueueResult, MessageType, classify_configured_message};
 use crate::models::event::EventQueueItemJson;
 use crate::models::event_db::EventQueueItem;
 use crate::models::mqtt_queue::MqttQueueItem;
@@ -305,13 +305,16 @@ async fn process_mqtt_queue(
             }
             MessageType::Event => {
                 let db = daemon_ctx.db.lock().await;
-                crate::consumers::mqtt::enqueue_event(
+                match crate::consumers::mqtt::enqueue_event(
                     &daemon_ctx.config,
                     &db,
                     &item.payload,
                     &item.topic,
-                );
-                false
+                ) {
+                    EnqueueResult::Inserted => false,
+                    EnqueueResult::Filtered => false,
+                    EnqueueResult::DbError => true,
+                }
             }
             other => {
                 warn!(

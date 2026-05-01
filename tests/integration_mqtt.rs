@@ -1134,3 +1134,151 @@ async fn mqtt_event_with_config_mappings() {
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
+
+#[tokio::test]
+async fn mqtt_buffered_event_moves_from_mqtt_queue_to_event_items() {
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(1883);
+    config.mqtt_name = Some("test".to_string());
+    config.event_topic = Some("ilert/events".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let payload =
+        r#"{"apiKey":"buf-key","eventType":"ALERT","summary":"buffered test","alertKey":"buf-1"}"#;
+    db.create_mqtt_queue_item("ilert/events", payload).unwrap();
+
+    let queued = db.get_mqtt_queue_items(10).unwrap();
+    assert_eq!(queued.len(), 1);
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = ILDatabase::new(&db_path);
+    let remaining_mqtt = db.get_mqtt_queue_items(10).unwrap();
+    assert!(
+        remaining_mqtt.is_empty(),
+        "mqtt_queue should be empty after successful enqueue"
+    );
+
+    let events = db.get_il_events(10).unwrap();
+    assert_eq!(events.len(), 1, "event should be in event_items");
+    assert_eq!(events[0].integration_key, "buf-key");
+    assert_eq!(events[0].summary, "buffered test");
+    assert_eq!(events[0].alert_key.as_ref().unwrap(), "buf-1");
+}
+
+#[tokio::test]
+async fn mqtt_buffered_event_db_failure_keeps_mqtt_queue_item() {
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let payload = r#"{"apiKey":"fail-key","eventType":"ALERT","summary":"should retry"}"#;
+    db.create_mqtt_queue_item("ilert/events", payload).unwrap();
+
+    let raw_conn = rusqlite::Connection::open(&db_path).unwrap();
+    raw_conn.execute_batch("DROP TABLE event_items").unwrap();
+    drop(raw_conn);
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(1883);
+    config.mqtt_name = Some("test".to_string());
+    config.event_topic = Some("ilert/events".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = daemon_ctx.db.lock().await;
+    let remaining = db.get_mqtt_queue_items(10).unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "mqtt_queue item should remain when event_items insert fails"
+    );
+    assert_eq!(remaining[0].topic, "ilert/events");
+}
+
+#[tokio::test]
+async fn mqtt_buffered_event_invalid_payload_dropped_from_mqtt_queue() {
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    db.create_mqtt_queue_item("ilert/events", "not valid json")
+        .unwrap();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(1883);
+    config.mqtt_name = Some("test".to_string());
+    config.event_topic = Some("ilert/events".to_string());
+    config.mqtt_buffer = true;
+    config.db_file = db_path.clone();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = ILDatabase::new(&db_path);
+    let remaining = db.get_mqtt_queue_items(10).unwrap();
+    assert!(
+        remaining.is_empty(),
+        "invalid payload should be dropped from mqtt_queue"
+    );
+
+    let events = db.get_il_events(10).unwrap();
+    assert!(
+        events.is_empty(),
+        "invalid payload should not create an event"
+    );
+}

@@ -604,27 +604,41 @@ fn process_event_message(
     }
 }
 
-pub fn enqueue_event(config: &ILConfig, db: &ILDatabase, payload: &str, topic: &str) {
-    if let Some(event) = prepare_mqtt_event(config, payload, topic) {
-        let event_api_path = build_event_api_path(&event.integrationKey);
-        let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
-        let insert_result = db.create_il_event(&db_event);
-        match insert_result {
-            Ok(res) => match res {
-                Some(val) => {
-                    let event_id = val.id.clone().unwrap_or("".to_string());
-                    info!(
-                        "Event {} successfully created and added to queue.",
-                        event_id
-                    );
-                }
-                None => {
-                    error!("Failed to create event, result is empty");
-                }
-            },
-            Err(e) => {
-                error!("Failed to create event {:?}.", e);
-            }
+#[derive(Debug, PartialEq)]
+pub enum EnqueueResult {
+    Inserted,
+    Filtered,
+    DbError,
+}
+
+pub fn enqueue_event(
+    config: &ILConfig,
+    db: &ILDatabase,
+    payload: &str,
+    topic: &str,
+) -> EnqueueResult {
+    let event = match prepare_mqtt_event(config, payload, topic) {
+        Some(e) => e,
+        None => return EnqueueResult::Filtered,
+    };
+    let event_api_path = build_event_api_path(&event.integrationKey);
+    let db_event = EventQueueItemJson::to_db(event, Some(event_api_path));
+    match db.create_il_event(&db_event) {
+        Ok(Some(val)) => {
+            let event_id = val.id.clone().unwrap_or("".to_string());
+            info!(
+                "Event {} successfully created and added to queue.",
+                event_id
+            );
+            EnqueueResult::Inserted
+        }
+        Ok(None) => {
+            error!("Failed to create event, result is empty");
+            EnqueueResult::DbError
+        }
+        Err(e) => {
+            error!("Failed to create event {:?}.", e);
+            EnqueueResult::DbError
         }
     }
 }
