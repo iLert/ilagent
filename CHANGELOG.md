@@ -1,5 +1,13 @@
 # ilagent CHANGELOG
 
+## 2026-05-01, Version 0.8.0
+
+* **BREAKING** `--event_topic` and `--heartbeat_topic` are no longer subscribed by default in MQTT mode, at least one topic (`--event_topic`, `--heartbeat_topic`, or `--policy_topic`) must be explicitly configured
+* **BREAKING** MQTT non-buffered mode now requires `--mqtt_qos 1` or `--mqtt_qos 2` — QoS 0 without `--mqtt_buffer` is rejected at startup because there is no broker acknowledgement to delay on delivery failure. Non-buffered mode delivers events and heartbeats directly to ilert inline, making it possible to run MQTT without SQLite
+* added TLS certificate hot reload for MQTT — certificates are polled every 30s and the connection is transparently re-established when files change on disk
+* moved from `TlsConfiguration::Simple` to `TlsConfiguration::Rustls` with explicit PEM parsing and validation
+* fixed buffered MQTT event durability: `enqueue_event` now distinguishes insert success, filtered payload, and database failure so that `mqtt_queue` items are retained for retry on DB errors instead of being silently dropped
+
 ## 2026-03-23, Version 0.7.0
 
 * **BREAKING** `--map_key_summary`, `--map_key_alert_key`, and `--map_key_etype` now interpret dots as nested path separators (e.g. `data.message` accesses `{"data": {"message": "..."}}`) — JSON keys containing literal dots can no longer be matched with these flags
