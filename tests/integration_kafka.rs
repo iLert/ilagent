@@ -193,7 +193,7 @@ async fn kafka_event_delivered_to_ilert() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = kafka_daemon_ctx(&broker, &db_path, ilert_client, None);
     let ctx_clone = daemon_ctx.clone();
 
@@ -244,7 +244,7 @@ async fn kafka_heartbeat_delivered() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = kafka_daemon_ctx(&broker, &db_path, ilert_client, None);
     let ctx_clone = daemon_ctx.clone();
 
@@ -287,7 +287,7 @@ async fn kafka_invalid_json_committed_without_crash() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = kafka_daemon_ctx(&broker, &db_path, ilert_client, None);
     let ctx_clone = daemon_ctx.clone();
 
@@ -342,7 +342,7 @@ async fn kafka_multiple_events_all_delivered() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = kafka_daemon_ctx(&broker, &db_path, ilert_client, None);
     let ctx_clone = daemon_ctx.clone();
 
@@ -419,7 +419,7 @@ async fn kafka_event_with_config_mappings() {
     db.prepare_database();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
         config,
@@ -497,7 +497,7 @@ async fn kafka_event_forward_payload() {
     db.prepare_database();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
         config,
@@ -692,7 +692,7 @@ async fn kafka_policy_delivered() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {

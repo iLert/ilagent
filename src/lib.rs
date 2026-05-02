@@ -2,6 +2,8 @@ use ilert::ilert::ILert;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::Mutex;
 
+pub const CALLER_AGENT: &str = concat!("ilagent/", env!("CARGO_PKG_VERSION"));
+
 pub mod config;
 pub mod consumers;
 pub mod db;

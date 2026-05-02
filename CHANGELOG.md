@@ -3,6 +3,8 @@
 ## 2026-05-02, Version 0.9.0
 
 * **BREAKING** removed the `cleanup` subcommand — this functionality has moved to the new `ilert` CLI tool (github.com/iLert/ilert-cli)
+* HTTP requests to the ilert API now identify themselves with `ilagent/{version}` in the User-Agent header, enabling better version tracking and diagnostics
+* upgraded ilert-rust SDK from 5.1.0 to 5.2.0
 
 ## 2026-05-01, Version 0.8.0
 

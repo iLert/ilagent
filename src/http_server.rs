@@ -11,7 +11,7 @@ use ilert::ilert_builders::{ILertEventType, ILertPriority};
 
 use crate::db::ILDatabase;
 use crate::models::event::EventQueueItemJson;
-use crate::{DaemonContext, hbt};
+use crate::{CALLER_AGENT, DaemonContext, hbt};
 
 pub struct WebContextContainer {
     pub db: ILDatabase,
@@ -173,7 +173,8 @@ pub fn config_app(cfg: &mut web::ServiceConfig) {
 pub async fn run_server(daemon_ctx: Arc<DaemonContext>) -> () {
     let addr = daemon_ctx.config.get_http_bind_str().clone();
     let db = ILDatabase::new(daemon_ctx.config.db_file.as_str());
-    let ilert_client = ILert::new().expect("failed to create ilert client");
+    let ilert_client = ILert::new_with_opts(None, None, None, Some(CALLER_AGENT))
+        .expect("failed to create ilert client");
     info!("Starting HTTP server @ {}", addr);
     let container = web::Data::new(Mutex::new(WebContextContainer { db, ilert_client }));
     let daemon_data = web::Data::new(daemon_ctx.clone());

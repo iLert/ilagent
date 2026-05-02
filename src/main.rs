@@ -3,6 +3,8 @@ use env_logger::Env;
 use ilert::ilert::ILert;
 use ilert::ilert_builders::{EventImage, EventLink};
 use log::{debug, error, info, warn};
+
+use ilagent::CALLER_AGENT;
 use std::panic;
 use std::process;
 use std::sync::Arc;
@@ -573,7 +575,8 @@ async fn run_daemon(config: &ILConfig) {
         process::exit(1);
     }));
 
-    let mut ilert_client = ILert::new().expect("Failed to create ilert client");
+    let mut ilert_client = ILert::new_with_opts(None, None, None, Some(CALLER_AGENT))
+        .expect("Failed to create ilert client");
     if let Some(ref api_key) = config.api_key {
         ilert_client
             .auth_via_token(api_key)
@@ -1224,7 +1227,8 @@ fn resolve_integration_key(matches: &ArgMatches) -> String {
     Attempts to create an event, one time - skips queue
 */
 async fn run_event(matches: &ArgMatches) {
-    let ilert_client = ILert::new().expect("Failed to create ilert client");
+    let ilert_client = ILert::new_with_opts(None, None, None, Some(CALLER_AGENT))
+        .expect("Failed to create ilert client");
     let integration_key = resolve_integration_key(matches);
     let event_type = matches.get_one::<String>("event_type").unwrap();
     let summary = matches.get_one::<String>("summary").unwrap();
@@ -1279,7 +1283,8 @@ async fn run_event(matches: &ArgMatches) {
     Attempts to ping a heartbeat
 */
 async fn run_heartbeat(matches: &ArgMatches) {
-    let ilert_client = ILert::new().expect("Failed to create ilert client");
+    let ilert_client = ILert::new_with_opts(None, None, None, Some(CALLER_AGENT))
+        .expect("Failed to create ilert client");
     let integration_key = resolve_integration_key(matches);
 
     if hbt::ping_heartbeat(&ilert_client, &integration_key).await {

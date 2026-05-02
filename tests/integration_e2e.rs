@@ -14,7 +14,7 @@ use ilagent::poll::send_queued_event;
 fn test_setup(mock_uri: &str, db_path: &str) -> web::Data<Mutex<WebContextContainer>> {
     let db = ILDatabase::new(db_path);
     db.prepare_database();
-    let ilert_client = ILert::new_with_opts(Some(mock_uri), None, Some(5)).unwrap();
+    let ilert_client = ILert::new_with_opts(Some(mock_uri), None, Some(5), None).unwrap();
     web::Data::new(Mutex::new(WebContextContainer { db, ilert_client }))
 }
 
@@ -72,7 +72,7 @@ async fn e2e_post_event_poll_deliver_and_delete() {
         let event = events[0].clone();
 
         // create a separate ilert client pointing at mock
-        let client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        let client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
         (event, client)
     };
 
@@ -130,7 +130,7 @@ async fn e2e_post_event_rate_limited_stays_in_queue() {
     };
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let should_retry = send_queued_event(&ilert_client, &event).await;
     assert!(should_retry, "429 should signal retry");
 
@@ -172,7 +172,7 @@ async fn e2e_mqtt_event_uses_custom_path() {
 
     // poll sends it
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let should_retry = send_queued_event(&ilert_client, &inserted).await;
     assert!(!should_retry);
 }

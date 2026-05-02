@@ -61,7 +61,7 @@ async fn policy_update_single_routing_key() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -113,7 +113,7 @@ async fn policy_update_multiple_routing_keys_concatenated() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -166,7 +166,7 @@ async fn policy_update_shift_defaults_to_zero() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -222,7 +222,7 @@ async fn policy_update_with_custom_field_paths() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -246,7 +246,7 @@ async fn policy_update_user_resolve_server_error_retries() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -268,7 +268,7 @@ async fn policy_update_user_resolve_client_error_no_retry() {
         .await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();
@@ -283,7 +283,7 @@ async fn policy_update_filtered_message_no_api_calls() {
     let mock_server = MockServer::start().await;
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let mut config = ILConfig::new();

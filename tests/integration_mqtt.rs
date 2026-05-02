@@ -157,7 +157,7 @@ async fn mqtt_event_delivered_without_db_queue() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path, ilert_client);
     let ctx_clone = daemon_ctx.clone();
 
@@ -231,7 +231,7 @@ async fn mqtt_non_buffered_qos1_redelivers_after_retryable_ilert_failure() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path, ilert_client);
     let ctx_clone = daemon_ctx.clone();
 
@@ -285,7 +285,7 @@ async fn mqtt_multiple_events_fifo_order() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path, ilert_client);
     let ctx_clone = daemon_ctx.clone();
 
@@ -346,7 +346,7 @@ async fn mqtt_ignored_topic_not_queued() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path, ilert_client);
     let ctx_clone = daemon_ctx.clone();
 
@@ -401,7 +401,7 @@ async fn mqtt_invalid_json_dropped() {
     let db_path = tmp.path().to_str().unwrap().to_string();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     let daemon_ctx = mqtt_daemon_ctx("127.0.0.1", port, &db_path, ilert_client);
     let ctx_clone = daemon_ctx.clone();
 
@@ -480,7 +480,7 @@ async fn mqtt_event_e2e_with_poll() {
     db.prepare_database();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
         config,
@@ -587,7 +587,7 @@ async fn mqtt_policy_buffer_drain() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -675,7 +675,7 @@ async fn mqtt_policy_buffer_retry_on_failure() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -754,7 +754,7 @@ async fn mqtt_policy_buffer_filtered_dropped() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -837,7 +837,7 @@ async fn mqtt_policy_buffer_max_retries_drops_message() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
@@ -918,7 +918,7 @@ async fn mqtt_policy_buffer_unlimited_retries_keeps_message() {
     db.prepare_database();
 
     let mut ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
     ilert_client.auth_via_token("test-api-key").unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {

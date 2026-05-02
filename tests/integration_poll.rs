@@ -61,7 +61,7 @@ async fn send_event_202_returns_no_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(!should_retry, "202 should not retry");
@@ -81,7 +81,7 @@ async fn send_event_429_returns_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(should_retry, "429 should retry");
@@ -101,7 +101,7 @@ async fn send_event_500_returns_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(should_retry, "500 should retry");
@@ -119,7 +119,7 @@ async fn send_event_502_returns_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(should_retry, "502 should retry");
@@ -139,7 +139,7 @@ async fn send_event_404_returns_no_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(!should_retry, "404 should not retry");
@@ -159,7 +159,7 @@ async fn send_event_400_returns_no_retry() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(!should_retry, "400 should not retry");
@@ -180,7 +180,7 @@ async fn send_event_bad_event_type_drops() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let mut event = alert_event();
     event.event_type = "INVALID".to_string();
@@ -202,7 +202,7 @@ async fn send_event_bad_priority_drops() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let mut event = alert_event();
     event.priority = Some("MEDIUM".to_string());
@@ -224,7 +224,7 @@ async fn send_resolve_event_succeeds() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &resolve_event()).await;
     assert!(!should_retry);
@@ -244,7 +244,7 @@ async fn send_event_uses_custom_api_path() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &event_with_path()).await;
     assert!(!should_retry);
@@ -264,7 +264,7 @@ async fn send_event_with_priority_succeeds() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let should_retry = send_queued_event(&ilert_client, &event_with_priority()).await;
     assert!(!should_retry);
@@ -284,7 +284,7 @@ async fn send_event_without_id_still_works() {
         .await;
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let event = EventQueueItem::new_with_required("k1", "ALERT", "test", None);
     let should_retry = send_queued_event(&ilert_client, &event).await;
@@ -327,7 +327,7 @@ async fn event_poll_max_retries_drops_event() {
     assert_eq!(queued.len(), 1, "event should be in queue");
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
         config,
@@ -387,7 +387,7 @@ async fn event_poll_unlimited_retries_keeps_event() {
     db.create_il_event(&event).unwrap();
 
     let ilert_client =
-        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5)).unwrap();
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
 
     let daemon_ctx = Arc::new(DaemonContext {
         config,
