@@ -1,5 +1,9 @@
 # ilagent CHANGELOG
 
+## 2026-05-02, Version 0.9.0
+
+* **BREAKING** removed the `cleanup` subcommand — this functionality has moved to the new `ilert` CLI tool (github.com/iLert/ilert-cli)
+
 ## 2026-05-01, Version 0.8.0
 
 * **BREAKING** `--event_topic` and `--heartbeat_topic` are no longer subscribed by default in MQTT mode, at least one topic (`--event_topic`, `--heartbeat_topic`, or `--policy_topic`) must be explicitly configured

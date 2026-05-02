@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
-use ilagent::{DaemonContext, KafkaProbeState, MqttProbeState, cleanup, consumers, hbt, http_server, poll, version_check};
+use ilagent::{DaemonContext, KafkaProbeState, MqttProbeState, consumers, hbt, http_server, poll, version_check};
 
 fn strip_bearer_prefix(key: String) -> String {
     if let Some(stripped) = key.strip_prefix("Bearer ") {
@@ -256,23 +256,6 @@ pub fn build_cli() -> Command {
                 .help("Sets the integration key (falls back to ILERT_INTEGRATION_KEY env var)"),
         );
 
-    let cleanup_cmd = Command::new("cleanup")
-        .about("Clean up ilert resources (requires ILERT_API_KEY env var)")
-        .arg(
-            Arg::new("resource")
-                .long("resource")
-                .value_name("RESOURCE")
-                .required(true)
-                .help("Sets the resource target to clean up"),
-        )
-        .arg(
-            Arg::new("responder")
-                .long("responder")
-                .value_name("USER_ID")
-                .action(ArgAction::Append)
-                .help("Filter alerts by responder user ID (can be specified multiple times)"),
-        );
-
     Command::new("ilagent")
         .version(env!("CARGO_PKG_VERSION"))
         .author("ilert GmbH. <support@ilert.com>")
@@ -301,7 +284,6 @@ pub fn build_cli() -> Command {
         .subcommand(daemon_cmd)
         .subcommand(event_cmd)
         .subcommand(heartbeat_cmd)
-        .subcommand(cleanup_cmd)
 }
 
 #[tokio::main]
@@ -330,7 +312,6 @@ async fn main() {
         }
         Some(("event", sub_m)) => run_event(sub_m).await,
         Some(("heartbeat", sub_m)) => run_heartbeat(sub_m).await,
-        Some(("cleanup", sub_m)) => run_cleanup(sub_m).await,
         _ => unreachable!("subcommand_required prevents this"),
     }
 }
@@ -808,48 +789,6 @@ mod tests {
     #[test]
     fn cli_heartbeat_valid() {
         let m = build_cli().try_get_matches_from(vec!["ilagent", "heartbeat", "-k", "hbt123"]);
-        assert!(m.is_ok());
-    }
-
-    #[test]
-    fn cli_cleanup_requires_resource() {
-        let result = build_cli().try_get_matches_from(vec!["ilagent", "cleanup"]);
-        assert!(result.is_err()); // missing --resource
-    }
-
-    #[test]
-    fn cli_cleanup_valid() {
-        let m =
-            build_cli().try_get_matches_from(vec!["ilagent", "cleanup", "--resource", "alerts"]);
-        assert!(m.is_ok());
-    }
-
-    #[test]
-    fn cli_cleanup_with_responders() {
-        let m = build_cli().try_get_matches_from(vec![
-            "ilagent",
-            "cleanup",
-            "--resource",
-            "alerts",
-            "--responder",
-            "user1",
-            "--responder",
-            "user2",
-        ]);
-        assert!(m.is_ok());
-        let sub = m.unwrap().subcommand_matches("cleanup").unwrap().clone();
-        let responders: Vec<&str> = sub
-            .get_many::<String>("responder")
-            .unwrap()
-            .map(|s| s.as_str())
-            .collect();
-        assert_eq!(responders, vec!["user1", "user2"]);
-    }
-
-    #[test]
-    fn cli_cleanup_incidents_valid() {
-        let m =
-            build_cli().try_get_matches_from(vec!["ilagent", "cleanup", "--resource", "incidents"]);
         assert!(m.is_ok());
     }
 
@@ -1348,32 +1287,3 @@ async fn run_heartbeat(matches: &ArgMatches) {
     }
 }
 
-/**
-    Attempts to clean-up resources
-*/
-async fn run_cleanup(matches: &ArgMatches) {
-    let api_key = strip_bearer_prefix(
-        std::env::var("ILERT_API_KEY")
-            .expect("ILERT_API_KEY environment variable is required for cleanup"),
-    );
-    let mut ilert_client = ILert::new().expect("Failed to create ilert client");
-    ilert_client
-        .auth_via_token(&api_key)
-        .expect("Failed to set api key");
-
-    let resource = matches.get_one::<String>("resource").unwrap();
-    let responders: Vec<&str> = matches
-        .get_many::<String>("responder")
-        .map(|vals| vals.map(|s| s.as_str()).collect())
-        .unwrap_or_default();
-    match resource.as_str() {
-        "alerts" => cleanup::cleanup_alerts(&ilert_client, &responders).await,
-        "incidents" => {
-            if !responders.is_empty() {
-                warn!("--responder filter is not supported for incidents, ignoring");
-            }
-            cleanup::cleanup_incidents(&ilert_client).await
-        }
-        _ => panic!("Unsupported 'resource' provided."),
-    }
-}

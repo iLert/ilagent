@@ -2,7 +2,6 @@ use ilert::ilert::ILert;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use tokio::sync::Mutex;
 
-pub mod cleanup;
 pub mod config;
 pub mod consumers;
 pub mod db;
