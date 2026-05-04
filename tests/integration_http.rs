@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::http_server::{WebContextContainer, config_app};
-use ilagent::{DaemonContext, KafkaProbeState, MqttProbeState};
+use ilagent::{DaemonContext, EdgeConnectorProbeState, KafkaProbeState, MqttProbeState};
 
 fn test_container() -> (web::Data<Mutex<WebContextContainer>>, NamedTempFile) {
     let file = NamedTempFile::new().unwrap();
@@ -285,6 +285,18 @@ fn test_daemon_ctx_full(
     web::Data<Arc<DaemonContext>>,
     NamedTempFile,
 ) {
+    test_daemon_ctx_all(mqtt_probe, kafka_probe, None)
+}
+
+fn test_daemon_ctx_all(
+    mqtt_probe: Option<MqttProbeState>,
+    kafka_probe: Option<KafkaProbeState>,
+    edge_connector_probe: Option<EdgeConnectorProbeState>,
+) -> (
+    web::Data<Mutex<WebContextContainer>>,
+    web::Data<Arc<DaemonContext>>,
+    NamedTempFile,
+) {
     let file = NamedTempFile::new().unwrap();
     let db_path = file.path().to_str().unwrap();
     let db = ILDatabase::new(db_path);
@@ -305,6 +317,7 @@ fn test_daemon_ctx_full(
         running: AtomicBool::new(true),
         mqtt_probe,
         kafka_probe,
+        edge_connector_probe,
     });
 
     (container, web::Data::new(daemon_ctx), file)
@@ -596,4 +609,46 @@ async fn ready_returns_503_kafka_worker_exited() {
     assert_eq!(body["component"], "kafka");
     assert_eq!(body["worker_exited"], true);
     assert_eq!(body["error"], "broker connection lost");
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_edge_connector_with_error() {
+    let probe = EdgeConnectorProbeState::new();
+    probe.polling.store(true, Ordering::Relaxed);
+    probe.record_error("authentication failed — check integration key".to_string());
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "edge_connector");
+}
+
+#[actix_rt::test]
+async fn ready_returns_204_edge_connector_healthy() {
+    let probe = EdgeConnectorProbeState::new();
+    probe.polling.store(true, Ordering::Relaxed);
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
 }

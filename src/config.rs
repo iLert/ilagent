@@ -46,6 +46,18 @@ pub struct ILConfig {
     pub map_key_shift: Option<String>,
     pub shift_offset: i64,
     pub max_retries: u32,
+
+    pub edge_connector_key: Option<String>,
+    pub edge_poll_interval: u64,
+    pub edge_mode: Option<String>,
+    pub edge_http_url: Option<String>,
+    pub edge_http_method: Option<String>,
+    pub edge_topic: Option<String>,
+    pub edge_script: Option<String>,
+    pub edge_cluster_id: Option<String>,
+    pub edge_instance_id: Option<String>,
+    pub edge_standby_interval: u64,
+    pub edge_api_host: Option<String>,
 }
 
 impl ILConfig {
@@ -90,6 +102,17 @@ impl ILConfig {
             map_key_shift: None,
             shift_offset: 0,
             max_retries: 100,
+            edge_connector_key: None,
+            edge_poll_interval: 5,
+            edge_mode: None,
+            edge_http_url: None,
+            edge_http_method: None,
+            edge_topic: None,
+            edge_script: None,
+            edge_cluster_id: None,
+            edge_instance_id: None,
+            edge_standby_interval: 5,
+            edge_api_host: None,
         }
     }
 

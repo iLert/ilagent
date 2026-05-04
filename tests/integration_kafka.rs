@@ -105,6 +105,7 @@ fn kafka_daemon_ctx(
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe,
+        edge_connector_probe: None,
     })
 }
 
@@ -428,6 +429,7 @@ async fn kafka_event_with_config_mappings() {
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe: None,
+        edge_connector_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -506,6 +508,7 @@ async fn kafka_event_forward_payload() {
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe: None,
+        edge_connector_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -702,6 +705,7 @@ async fn kafka_policy_delivered() {
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe: None,
+        edge_connector_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
