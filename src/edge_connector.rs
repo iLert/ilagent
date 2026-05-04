@@ -62,17 +62,17 @@ pub async fn poll_items(
         .query(&[("limit", limit.to_string())]);
 
     if let Some(cid) = cluster_id {
-        request = request.query(&[("clusterId", cid)]);
+        request = request.query(&[("cluster-id", cid)]);
         if let Some(iid) = instance_id {
-            request = request.query(&[("instanceId", iid)]);
+            request = request.query(&[("instance-id", iid)]);
         }
         if let Some(lpid) = last_processed_id {
             if lpid > 0 {
-                request = request.query(&[("lastProcessedId", lpid.to_string())]);
+                request = request.query(&[("last-processed-id", lpid.to_string())]);
             }
         }
     } else {
-        request = request.query(&[("afterId", after_id.to_string())]);
+        request = request.query(&[("after-id", after_id.to_string())]);
     }
 
     let response = request
@@ -288,10 +288,13 @@ async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result
             .map_err(|e| format!("failed to write to script stdin: {}", e))?;
     }
 
-    let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
-        .await
-        .map_err(|_| "script execution timed out (30s)".to_string())?
-        .map_err(|e| format!("script wait failed: {}", e))?;
+    let status = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
+        Ok(result) => result.map_err(|e| format!("script wait failed: {}", e))?,
+        Err(_) => {
+            let _ = child.kill().await;
+            return Err("script execution timed out (30s)".to_string());
+        }
+    };
 
     if status.success() {
         Ok(())

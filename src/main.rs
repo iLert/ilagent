@@ -184,10 +184,6 @@ pub fn build_cli() -> Command {
             .help("Kafka consumer group id")
             .default_value("ilagent"))
         // edge connector
-        .arg(Arg::new("edge_connector")
-            .long("edge_connector")
-            .value_name("INTEGRATION_KEY")
-            .help("Enable edge connector polling with the given integration key"))
         .arg(Arg::new("edge_poll_interval")
             .long("edge_poll_interval")
             .value_name("SECONDS")
@@ -397,8 +393,8 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
         config.db_file = file.to_string();
     }
 
-    if let Some(edge_key) = matches.get_one::<String>("edge_connector") {
-        return build_edge_daemon_config(matches, config, edge_key);
+    if matches.get_one::<String>("edge_mode").is_some() {
+        return build_edge_daemon_config(matches, config);
     }
 
     build_normal_daemon_config(matches, config)
@@ -407,12 +403,14 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
 fn build_edge_daemon_config(
     matches: &ArgMatches,
     mut config: ILConfig,
-    edge_key: &str,
 ) -> ILConfig {
+    let edge_key = std::env::var("ILERT_EDGE_CONNECTOR_KEY")
+        .expect("ILERT_EDGE_CONNECTOR_KEY env var is required for edge connector mode");
+
     for arg in EDGE_REJECTED_STRING_ARGS {
         if matches.get_one::<String>(arg).is_some() {
             panic!(
-                "--{} cannot be used with --edge_connector (edge connector is an exclusive daemon mode)",
+                "--{} cannot be used with --edge_mode (edge connector is an exclusive daemon mode)",
                 arg
             );
         }
@@ -420,7 +418,7 @@ fn build_edge_daemon_config(
     for arg in EDGE_REJECTED_FLAG_ARGS {
         if matches.get_flag(arg) {
             panic!(
-                "--{} cannot be used with --edge_connector (edge connector is an exclusive daemon mode)",
+                "--{} cannot be used with --edge_mode (edge connector is an exclusive daemon mode)",
                 arg
             );
         }
@@ -1443,172 +1441,375 @@ mod tests {
     }
 
     // --- build_daemon_config: edge connector ---
+    // All edge connector tests are consolidated in a single test to avoid env var races,
+    // since they all require ILERT_EDGE_CONNECTOR_KEY to be set.
 
     #[test]
-    fn daemon_config_edge_connector_defaults() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:test-key",
-                "--edge_http_url",
-                "http://localhost:8080/webhook",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_connector_key.unwrap(), "iec1:test-key");
-        assert_eq!(config.edge_poll_interval, 5);
-        assert!(config.edge_mode.is_none()); // defaults to http at runtime
-        assert_eq!(
-            config.edge_http_url.unwrap(),
-            "http://localhost:8080/webhook"
-        );
-        assert!(config.edge_http_method.is_none());
-        assert!(config.edge_topic.is_none());
-        assert!(config.edge_script.is_none());
-        assert!(config.edge_cluster_id.is_none());
-        assert!(config.edge_instance_id.is_none());
-        assert_eq!(config.edge_standby_interval, 5);
+    fn daemon_config_edge_connector_all() {
+        unsafe {
+            std::env::set_var("ILERT_EDGE_CONNECTOR_KEY", "iec1:test-key");
+        }
+
+        // defaults
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "http",
+                    "--edge_http_url",
+                    "http://localhost:8080/webhook",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_connector_key.as_deref().unwrap(), "iec1:test-key");
+            assert_eq!(config.edge_poll_interval, 5);
+            assert_eq!(config.edge_mode.as_deref().unwrap(), "http");
+            assert_eq!(config.edge_http_url.unwrap(), "http://localhost:8080/webhook");
+            assert!(config.edge_http_method.is_none());
+            assert!(config.edge_topic.is_none());
+            assert!(config.edge_script.is_none());
+            assert!(config.edge_cluster_id.is_none());
+            assert!(config.edge_instance_id.is_none());
+            assert_eq!(config.edge_standby_interval, 5);
+        }
+
+        // custom http config
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_poll_interval",
+                    "10",
+                    "--edge_mode",
+                    "http",
+                    "--edge_http_url",
+                    "http://local:9090/events",
+                    "--edge_http_method",
+                    "PUT",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_poll_interval, 10);
+            assert_eq!(config.edge_mode.unwrap(), "http");
+            assert_eq!(config.edge_http_url.unwrap(), "http://local:9090/events");
+            assert_eq!(config.edge_http_method.unwrap(), "PUT");
+        }
+
+        // kafka mode
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "kafka",
+                    "--kafka_brokers",
+                    "localhost:9092",
+                    "--edge_topic",
+                    "edge-events",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_mode.unwrap(), "kafka");
+            assert_eq!(config.kafka_brokers.unwrap(), "localhost:9092");
+            assert_eq!(config.edge_topic.unwrap(), "edge-events");
+        }
+
+        // ha mode
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "http",
+                    "--edge_http_url",
+                    "http://localhost:8080/webhook",
+                    "--edge_cluster_id",
+                    "prod-cluster",
+                    "--edge_instance_id",
+                    "node-1",
+                    "--edge_standby_interval",
+                    "3",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_cluster_id.unwrap(), "prod-cluster");
+            assert_eq!(config.edge_instance_id.unwrap(), "node-1");
+            assert_eq!(config.edge_standby_interval, 3);
+        }
+
+        // mqtt without consumer topics
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "mqtt",
+                    "-m",
+                    "broker.local",
+                    "--edge_topic",
+                    "edge-events",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_mode.as_deref().unwrap(), "mqtt");
+            assert_eq!(config.mqtt_host.as_deref().unwrap(), "broker.local");
+            assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
+            assert!(config.event_topic.is_none());
+        }
+
+        // kafka without consumer topics
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "kafka",
+                    "--kafka_brokers",
+                    "localhost:9092",
+                    "--edge_topic",
+                    "edge-events",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_mode.as_deref().unwrap(), "kafka");
+            assert_eq!(config.kafka_brokers.as_deref().unwrap(), "localhost:9092");
+            assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
+            assert!(config.event_topic.is_none());
+        }
+
+        // mqtt with credentials
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "mqtt",
+                    "-m",
+                    "broker.local",
+                    "--edge_topic",
+                    "edge-events",
+                    "--mqtt_username",
+                    "user1",
+                    "--mqtt_password",
+                    "pass1",
+                    "--mqtt_qos",
+                    "1",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.mqtt_host.as_deref().unwrap(), "broker.local");
+            assert_eq!(config.mqtt_username.as_deref().unwrap(), "user1");
+            assert_eq!(config.mqtt_password.as_deref().unwrap(), "pass1");
+            assert_eq!(config.mqtt_qos, 1);
+            assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
+        }
+
+        // not set without edge_mode
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec!["ilagent", "daemon"])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert!(config.edge_connector_key.is_none());
+        }
+
+        // --- panic cases (same env var, must be in same test) ---
+
+        // http requires url
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec!["ilagent", "daemon", "--edge_mode", "http"])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("--edge_http_url is required"), "got: {}", msg);
+        }
+
+        // kafka requires brokers
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "kafka", "--edge_topic", "test",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("--kafka_brokers is required"), "got: {}", msg);
+        }
+
+        // script requires path
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec!["ilagent", "daemon", "--edge_mode", "script"])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("--edge_script is required"), "got: {}", msg);
+        }
+
+        // rejects port
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "-p", "8080",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // rejects heartbeat
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "-b", "hbt-key",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // rejects event topic
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "mqtt", "-m", "broker.local",
+                        "--edge_topic", "edge-events", "-e", "ilert/events",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // rejects policy topic
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--policy_topic", "policies",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // kafka requires edge topic
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "kafka", "--kafka_brokers",
+                        "localhost:9092",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("--edge_topic is required"), "got: {}", msg);
+        }
+
+        // mqtt requires edge topic
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "mqtt", "-m", "broker.local",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("--edge_topic is required"), "got: {}", msg);
+        }
+
+        // rejects map_key_email
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--map_key_email", "user.email",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            assert!(result.is_err());
+        }
+
+        // rejects max_retries
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--max_retries", "50",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            assert!(result.is_err());
+        }
+
+        unsafe {
+            std::env::remove_var("ILERT_EDGE_CONNECTOR_KEY");
+        }
     }
 
-    #[test]
-    fn daemon_config_edge_connector_custom() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:custom-key",
-                "--edge_poll_interval",
-                "10",
-                "--edge_mode",
-                "http",
-                "--edge_http_url",
-                "http://local:9090/events",
-                "--edge_http_method",
-                "PUT",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_connector_key.unwrap(), "iec1:custom-key");
-        assert_eq!(config.edge_poll_interval, 10);
-        assert_eq!(config.edge_mode.unwrap(), "http");
-        assert_eq!(config.edge_http_url.unwrap(), "http://local:9090/events");
-        assert_eq!(config.edge_http_method.unwrap(), "PUT");
-    }
-
-    #[test]
-    fn daemon_config_edge_connector_kafka_mode() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:kafka-key",
-                "--edge_mode",
-                "kafka",
-                "--kafka_brokers",
-                "localhost:9092",
-                "--edge_topic",
-                "edge-events",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_mode.unwrap(), "kafka");
-        assert_eq!(config.kafka_brokers.unwrap(), "localhost:9092");
-        assert_eq!(config.edge_topic.unwrap(), "edge-events");
-    }
-
-    #[test]
-    fn daemon_config_edge_connector_ha_mode() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:ha-key",
-                "--edge_http_url",
-                "http://localhost:8080/webhook",
-                "--edge_cluster_id",
-                "prod-cluster",
-                "--edge_instance_id",
-                "node-1",
-                "--edge_standby_interval",
-                "3",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_cluster_id.unwrap(), "prod-cluster");
-        assert_eq!(config.edge_instance_id.unwrap(), "node-1");
-        assert_eq!(config.edge_standby_interval, 3);
-    }
-
-    #[test]
-    fn daemon_config_edge_connector_not_set_by_default() {
-        let m = build_cli()
-            .try_get_matches_from(vec!["ilagent", "daemon"])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert!(config.edge_connector_key.is_none());
-    }
-
-    #[test]
-    #[should_panic(expected = "--edge_http_url is required")]
-    fn daemon_config_edge_connector_http_requires_url() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "http",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "--kafka_brokers is required")]
-    fn daemon_config_edge_connector_kafka_requires_brokers() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "kafka",
-                "--edge_topic",
-                "test",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "--edge_script is required")]
-    fn daemon_config_edge_connector_script_requires_path() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "script",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
+    fn panic_message(err: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(s) = err.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = err.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            "(non-string panic)".to_string()
+        }
     }
 
     #[test]
@@ -1616,8 +1817,6 @@ mod tests {
         let result = build_cli().try_get_matches_from(vec![
             "ilagent",
             "daemon",
-            "--edge_connector",
-            "iec1:key",
             "--edge_mode",
             "ftp",
         ]);
@@ -1625,283 +1824,10 @@ mod tests {
     }
 
     #[test]
-    fn daemon_config_edge_mqtt_without_consumer_topics() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "mqtt",
-                "-m",
-                "broker.local",
-                "--edge_topic",
-                "edge-events",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_mode.as_deref().unwrap(), "mqtt");
-        assert_eq!(config.mqtt_host.as_deref().unwrap(), "broker.local");
-        assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
-        assert!(config.event_topic.is_none());
-    }
-
-    #[test]
-    fn daemon_config_edge_kafka_without_consumer_topics() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "kafka",
-                "--kafka_brokers",
-                "localhost:9092",
-                "--edge_topic",
-                "edge-events",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.edge_mode.as_deref().unwrap(), "kafka");
-        assert_eq!(config.kafka_brokers.as_deref().unwrap(), "localhost:9092");
-        assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
-        assert!(config.event_topic.is_none());
-    }
-
-    #[test]
-    fn daemon_config_edge_mqtt_with_credentials() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "mqtt",
-                "-m",
-                "broker.local",
-                "--edge_topic",
-                "edge-events",
-                "--mqtt_username",
-                "user1",
-                "--mqtt_password",
-                "pass1",
-                "--mqtt_qos",
-                "1",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        let config = build_daemon_config(sub, &m);
-        assert_eq!(config.mqtt_host.as_deref().unwrap(), "broker.local");
-        assert_eq!(config.mqtt_username.as_deref().unwrap(), "user1");
-        assert_eq!(config.mqtt_password.as_deref().unwrap(), "pass1");
-        assert_eq!(config.mqtt_qos, 1);
-        assert_eq!(config.edge_topic.as_deref().unwrap(), "edge-events");
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_port() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "-p",
-                "8080",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_heartbeat() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "-b",
-                "hbt-key",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_event_topic() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "mqtt",
-                "-m",
-                "broker.local",
-                "--edge_topic",
-                "edge-events",
-                "-e",
-                "ilert/events",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_policy_topic() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "--policy_topic",
-                "policies",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "--edge_topic is required")]
-    fn daemon_config_edge_kafka_requires_edge_topic() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "kafka",
-                "--kafka_brokers",
-                "localhost:9092",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "--edge_topic is required")]
-    fn daemon_config_edge_mqtt_requires_edge_topic() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_mode",
-                "mqtt",
-                "-m",
-                "broker.local",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
     #[should_panic(expected = "At least one MQTT topic must be configured")]
     fn daemon_config_mqtt_without_edge_still_requires_topics() {
         let m = build_cli()
             .try_get_matches_from(vec!["ilagent", "daemon", "-m", "broker.local"])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_map_key_email() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "--map_key_email",
-                "user.email",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_map_key_shift() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "--map_key_shift",
-                "data.shift",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_shift_offset() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "--shift_offset",
-                "1",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be used with --edge_connector")]
-    fn daemon_config_edge_rejects_max_retries() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent",
-                "daemon",
-                "--edge_connector",
-                "iec1:key",
-                "--edge_http_url",
-                "http://localhost/webhook",
-                "--max_retries",
-                "50",
-            ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
         build_daemon_config(sub, &m);

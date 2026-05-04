@@ -77,7 +77,7 @@ async fn edge_connector_polls_and_delivers_via_http() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .and(header("Authorization", "iec1:test-key"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(items)))
         .expect(1)
@@ -86,7 +86,7 @@ async fn edge_connector_polls_and_delivers_via_http() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "2"))
+        .and(query_param("after-id", "2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
@@ -130,7 +130,7 @@ async fn edge_connector_cursor_persists_across_polls() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
                 10,
@@ -145,7 +145,7 @@ async fn edge_connector_cursor_persists_across_polls() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "10"))
+        .and(query_param("after-id", "10"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
                 20,
@@ -160,7 +160,7 @@ async fn edge_connector_cursor_persists_across_polls() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "20"))
+        .and(query_param("after-id", "20"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
@@ -206,7 +206,7 @@ async fn edge_connector_delivery_failure_stops_batch() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(items.clone())))
         .up_to_n_times(1)
         .mount(&poll_server)
@@ -215,7 +215,7 @@ async fn edge_connector_delivery_failure_stops_batch() {
     // After first successful delivery (cursor=1), subsequent polls return the same items from cursor 1
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "1"))
+        .and(query_param("after-id", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![
             poll_item(2, "alert-created", "101", "will fail"),
             poll_item(3, "alert-created", "102", "never reached"),
@@ -269,7 +269,7 @@ async fn edge_connector_delivers_correct_headers() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
                 42,
@@ -284,7 +284,7 @@ async fn edge_connector_delivers_correct_headers() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "42"))
+        .and(query_param("after-id", "42"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
@@ -360,8 +360,8 @@ async fn edge_connector_ha_standby_does_not_deliver() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("clusterId", "test-cluster"))
-        .and(query_param("instanceId", "node-2"))
+        .and(query_param("cluster-id", "test-cluster"))
+        .and(query_param("instance-id", "node-2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [],
             "role": "standby"
@@ -401,8 +401,8 @@ async fn edge_connector_ha_leader_delivers_with_last_processed_id() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("clusterId", "ha-cluster"))
-        .and(query_param("instanceId", "node-1"))
+        .and(query_param("cluster-id", "ha-cluster"))
+        .and(query_param("instance-id", "node-1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [poll_item(5, "alert-created", "50", "ha test")],
             "role": "leader"
@@ -414,13 +414,13 @@ async fn edge_connector_ha_leader_delivers_with_last_processed_id() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("lastProcessedId", "5"))
+        .and(query_param("last-processed-id", "5"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [],
             "role": "leader"
         })))
         .up_to_n_times(5)
-        .named("subsequent polls with lastProcessedId")
+        .named("subsequent polls with last-processed-id")
         .mount(&poll_server)
         .await;
 
@@ -477,7 +477,7 @@ async fn edge_connector_immediate_repoll_on_full_batch() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(full_batch)))
         .expect(1)
         .mount(&poll_server)
@@ -485,7 +485,7 @@ async fn edge_connector_immediate_repoll_on_full_batch() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "100"))
+        .and(query_param("after-id", "100"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
                 101,
@@ -500,7 +500,7 @@ async fn edge_connector_immediate_repoll_on_full_batch() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "101"))
+        .and(query_param("after-id", "101"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
@@ -569,7 +569,7 @@ async fn edge_connector_caps_consecutive_repolls() {
 
         Mock::given(method("GET"))
             .and(path("/api/edge-connections/events"))
-            .and(query_param("afterId", &after_id))
+            .and(query_param("after-id", &after_id))
             .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(batch)))
             .up_to_n_times(1)
             .mount(&poll_server)
@@ -579,7 +579,7 @@ async fn edge_connector_caps_consecutive_repolls() {
     let final_after_id = (MAX_CONSECUTIVE_REPOLLS as i64 * 100).to_string();
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", &final_after_id))
+        .and(query_param("after-id", &final_after_id))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(3)
         .mount(&poll_server)
@@ -635,7 +635,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
     // First connector with key-A polls and advances to item 20
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .and(header("Authorization", "iec1:key-A"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
@@ -651,7 +651,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "20"))
+        .and(query_param("after-id", "20"))
         .and(header("Authorization", "iec1:key-A"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
@@ -702,7 +702,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
     // Second connector with key-B on the same DB must start at afterId=0
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .and(header("Authorization", "iec1:key-B"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
@@ -718,7 +718,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "5"))
+        .and(query_param("after-id", "5"))
         .and(header("Authorization", "iec1:key-B"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
@@ -919,7 +919,7 @@ async fn edge_connector_kafka_delivery() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![
             poll_item(1, "alert-created", "42", "test kafka delivery"),
             poll_item(2, "alert-resolved", "42", "resolved"),
@@ -930,7 +930,7 @@ async fn edge_connector_kafka_delivery() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "2"))
+        .and(query_param("after-id", "2"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
@@ -1030,7 +1030,7 @@ async fn edge_connector_mqtt_delivery() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "0"))
+        .and(query_param("after-id", "0"))
         .respond_with(
             ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
                 1,
@@ -1045,7 +1045,7 @@ async fn edge_connector_mqtt_delivery() {
 
     Mock::given(method("GET"))
         .and(path("/api/edge-connections/events"))
-        .and(query_param("afterId", "1"))
+        .and(query_param("after-id", "1"))
         .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
         .up_to_n_times(5)
         .mount(&poll_server)
