@@ -187,7 +187,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("edge_poll_interval")
             .long("edge_poll_interval")
             .value_name("SECONDS")
-            .help("Edge connector poll interval in seconds (default: 5)"))
+            .help("Edge connector poll interval in seconds (default: 10)"))
         .arg(Arg::new("edge_mode")
             .long("edge_mode")
             .value_name("MODE")
@@ -220,7 +220,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("edge_standby_interval")
             .long("edge_standby_interval")
             .value_name("SECONDS")
-            .help("HA standby retry interval in seconds (default: 5)"));
+            .help("HA standby retry interval in seconds (default: 10)"));
 
     for arg in consumer_args() {
         daemon_cmd = daemon_cmd.arg(arg);
@@ -437,9 +437,13 @@ fn build_edge_daemon_config(
     config.edge_connector_key = Some(edge_key.to_string());
 
     if let Some(interval) = matches.get_one::<String>("edge_poll_interval") {
-        config.edge_poll_interval = interval
+        let val = interval
             .parse::<u64>()
             .expect("Failed to parse edge_poll_interval as integer");
+        if val < 5 || val > 120 {
+            panic!("--edge_poll_interval must be between 5 and 120 seconds");
+        }
+        config.edge_poll_interval = val;
     }
 
     if let Some(mode) = matches.get_one::<String>("edge_mode") {
@@ -466,9 +470,13 @@ fn build_edge_daemon_config(
         .map(|s| s.to_string());
 
     if let Some(interval) = matches.get_one::<String>("edge_standby_interval") {
-        config.edge_standby_interval = interval
+        let val = interval
             .parse::<u64>()
             .expect("Failed to parse edge_standby_interval as integer");
+        if val < 5 || val > 120 {
+            panic!("--edge_standby_interval must be between 5 and 120 seconds");
+        }
+        config.edge_standby_interval = val;
     }
 
     let edge_mode = config
@@ -1512,7 +1520,7 @@ mod tests {
             let sub = m.subcommand_matches("daemon").unwrap();
             let config = build_daemon_config(sub, &m);
             assert_eq!(config.edge_connector_key.as_deref().unwrap(), "iec1:test-key");
-            assert_eq!(config.edge_poll_interval, 5);
+            assert_eq!(config.edge_poll_interval, 10);
             assert_eq!(config.edge_mode.as_deref().unwrap(), "http");
             assert_eq!(config.edge_http_url.unwrap(), "http://localhost:8080/webhook");
             assert!(config.edge_http_method.is_none());
@@ -1520,7 +1528,7 @@ mod tests {
             assert!(config.edge_script.is_none());
             assert!(config.edge_cluster_id.is_none());
             assert!(config.edge_instance_id.is_none());
-            assert_eq!(config.edge_standby_interval, 5);
+            assert_eq!(config.edge_standby_interval, 10);
         }
 
         // custom http config
@@ -1583,14 +1591,14 @@ mod tests {
                     "--edge_instance_id",
                     "node-1",
                     "--edge_standby_interval",
-                    "3",
+                    "7",
                 ])
                 .unwrap();
             let sub = m.subcommand_matches("daemon").unwrap();
             let config = build_daemon_config(sub, &m);
             assert_eq!(config.edge_cluster_id.unwrap(), "prod-cluster");
             assert_eq!(config.edge_instance_id.unwrap(), "node-1");
-            assert_eq!(config.edge_standby_interval, 3);
+            assert_eq!(config.edge_standby_interval, 7);
         }
 
         // mqtt without consumer topics
@@ -1837,6 +1845,70 @@ mod tests {
                 build_daemon_config(sub, &m);
             });
             assert!(result.is_err());
+        }
+
+        // rejects edge_poll_interval below 5
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--edge_poll_interval", "2",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("between 5 and 120"), "got: {}", msg);
+        }
+
+        // rejects edge_poll_interval above 120
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--edge_poll_interval", "300",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("between 5 and 120"), "got: {}", msg);
+        }
+
+        // rejects edge_standby_interval below 5
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--edge_standby_interval", "1",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("between 5 and 120"), "got: {}", msg);
+        }
+
+        // rejects edge_standby_interval above 120
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--edge_standby_interval", "200",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("between 5 and 120"), "got: {}", msg);
         }
 
         unsafe {

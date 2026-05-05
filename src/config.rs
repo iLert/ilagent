@@ -103,7 +103,7 @@ impl ILConfig {
             shift_offset: 0,
             max_retries: 100,
             edge_connector_key: None,
-            edge_poll_interval: 5,
+            edge_poll_interval: 10,
             edge_mode: None,
             edge_http_url: None,
             edge_http_method: None,
@@ -111,7 +111,7 @@ impl ILConfig {
             edge_script: None,
             edge_cluster_id: None,
             edge_instance_id: None,
-            edge_standby_interval: 5,
+            edge_standby_interval: 10,
             edge_api_host: None,
         }
     }
