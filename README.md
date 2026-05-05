@@ -10,6 +10,7 @@ ilagent 🦀 📦 is a lightweight program that lets you easily integrate your o
 
 ## What it does
 
+* Edge-connect alert actions into your on-premise infra without exposing public endpoints
 * Send events and heartbeats from the command line
 * Run a local HTTP proxy server with a retry queue
 * Consume MQTT messages and forward them to ilert

@@ -1,0 +1,37 @@
+#!/bin/bash
+
+# Script delivery with health endpoint and HA mode
+ILERT_EDGE_CONNECTOR_KEY='iec1...' ilagent daemon -v -v -p 8977 \
+    --edge_mode script \
+    --edge_script /opt/scripts/handle_event.sh \
+    --edge_cluster_id prod-cluster \
+    --edge_instance_id node-1
+
+### /opt/scripts/handle_event.sh:
+### --- #!/usr/bin/env bash
+### --- STD_IN=$(cat)
+### --- echo "$STD_IN" >> echo.txt */
+
+# HTTP delivery
+# ilagent daemon -v -v -p 8977 \
+#     --edge_mode http \
+#     --edge_http_url http://localhost:9090/webhook
+
+# Kafka delivery
+# ilagent daemon -v -v -p 8977 \
+#     --edge_mode kafka \
+#     --kafka_brokers localhost:9092 \
+#     --edge_topic edge-events
+
+# MQTT delivery with credentials
+# ilagent daemon -v -v -p 8977 \
+#     --edge_mode mqtt \
+#     -m broker.local -q 1883 \
+#     --mqtt_username user --mqtt_password pass \
+#     --mqtt_qos 1 \
+#     --edge_topic edge/events
+
+# With heartbeat for service liveness
+# ilagent daemon -v -v -p 8977 -b il1hbt123 \
+#     --edge_mode http \
+#     --edge_http_url http://localhost:9090/webhook
