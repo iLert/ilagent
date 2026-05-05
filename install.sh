@@ -11,7 +11,15 @@ curl_fetch_headers() {
 }
 
 curl_download_file() {
-  curl --silent --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$1" --output "$2"
+  local url="$1"
+  local output_path="$2"
+
+  if [ -t 1 ]; then
+    curl --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 --progress-bar "$url" --output "$output_path"
+    echo ""
+  else
+    curl --silent --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$url" --output "$output_path"
+  fi
 }
 
 VERSION=$(curl_fetch_headers "https://github.com/iLert/ilagent/releases/latest" | grep -i '^location:' | sed 's|.*/||' | tr -d '\r\n')
