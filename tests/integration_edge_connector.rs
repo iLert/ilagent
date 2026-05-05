@@ -263,6 +263,78 @@ async fn edge_connector_delivery_failure_stops_batch() {
 }
 
 #[tokio::test]
+async fn edge_connector_4xx_skips_item_and_advances_cursor() {
+    let poll_server = MockServer::start().await;
+    let delivery_server = MockServer::start().await;
+
+    let items = vec![
+        poll_item(1, "alert-created", "100", "ok"),
+        poll_item(2, "alert-created", "101", "bad request"),
+        poll_item(3, "alert-created", "102", "also ok"),
+    ];
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(items)))
+        .up_to_n_times(1)
+        .mount(&poll_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "3"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
+        .up_to_n_times(5)
+        .mount(&poll_server)
+        .await;
+
+    let counter = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    let counter_clone = counter.clone();
+    Mock::given(method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            let n = counter_clone.fetch_add(1, Ordering::Relaxed);
+            if n == 1 {
+                ResponseTemplate::new(400)
+            } else {
+                ResponseTemplate::new(200)
+            }
+        })
+        .mount(&delivery_server)
+        .await;
+
+    let config = build_edge_config(
+        &poll_server.uri(),
+        &format!("{}/webhook", delivery_server.uri()),
+        "iec1:skip-key",
+    );
+    let ctx = build_ctx(config);
+
+    let job_ctx = ctx.clone();
+    let handle = tokio::spawn(async move {
+        run_edge_connector_job(job_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    ctx.running.store(false, Ordering::Relaxed);
+    handle.await.unwrap();
+
+    let probe = ctx.edge_connector_probe.as_ref().unwrap();
+    assert_eq!(
+        probe.items_delivered.load(Ordering::Relaxed),
+        2,
+        "items 1 and 3 should be counted as delivered"
+    );
+
+    let db = ctx.db.lock().await;
+    let cursor = db.get_il_value(&cursor_db_key("iec1:skip-key")).unwrap();
+    assert_eq!(
+        cursor, "3",
+        "cursor should advance past all items including the 4xx-rejected one"
+    );
+}
+
+#[tokio::test]
 async fn edge_connector_delivers_correct_headers() {
     let poll_server = MockServer::start().await;
     let delivery_server = MockServer::start().await;
@@ -798,8 +870,8 @@ async fn edge_connector_readiness_recovers_after_error() {
         run_edge_connector_job(job_ctx).await;
     });
 
-    // Wait for first poll (error) + second poll (success)
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Wait for first poll (error) + backoff (5s) + second poll (success)
+    tokio::time::sleep(Duration::from_secs(8)).await;
     ctx.running.store(false, Ordering::Relaxed);
     handle.await.unwrap();
 

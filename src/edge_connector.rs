@@ -9,6 +9,30 @@ use crate::DaemonContext;
 const DEFAULT_LIMIT: i64 = 100;
 const DEFAULT_API_HOST: &str = "https://api.ilert.com";
 pub const MAX_CONSECUTIVE_REPOLLS: u32 = 10;
+const BACKOFF_BASE_SECS: u64 = 5;
+const BACKOFF_MAX_SECS: u64 = 300;
+
+#[derive(Debug)]
+pub struct DeliveryError {
+    pub message: String,
+    pub retryable: bool,
+}
+
+impl DeliveryError {
+    fn retryable(message: String) -> Self {
+        Self {
+            message,
+            retryable: true,
+        }
+    }
+
+    fn non_retryable(message: String) -> Self {
+        Self {
+            message,
+            retryable: false,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 pub struct PollResponse {
@@ -101,14 +125,15 @@ async fn deliver_item(
     mqtt_client: Option<&rumqttc::AsyncClient>,
     mqtt_ack: Option<&tokio::sync::Notify>,
     item: &EdgeConnectorItem,
-) -> Result<(), String> {
+) -> Result<(), DeliveryError> {
     let mode = ctx.config.edge_mode.as_deref().unwrap_or("http");
     match mode {
         "http" => deliver_http(ctx, http_client, item).await,
         "kafka" => {
             deliver_kafka(
                 ctx,
-                kafka_producer.ok_or("kafka producer not initialized")?,
+                kafka_producer
+                    .ok_or_else(|| DeliveryError::retryable("kafka producer not initialized".to_string()))?,
                 item,
             )
             .await
@@ -116,14 +141,16 @@ async fn deliver_item(
         "mqtt" => {
             deliver_mqtt(
                 ctx,
-                mqtt_client.ok_or("mqtt client not initialized")?,
-                mqtt_ack.ok_or("mqtt ack notify not initialized")?,
+                mqtt_client
+                    .ok_or_else(|| DeliveryError::retryable("mqtt client not initialized".to_string()))?,
+                mqtt_ack
+                    .ok_or_else(|| DeliveryError::retryable("mqtt ack notify not initialized".to_string()))?,
                 item,
             )
             .await
         }
         "script" => deliver_script(ctx, item).await,
-        _ => Err(format!("unknown edge mode: {}", mode)),
+        _ => Err(DeliveryError::non_retryable(format!("unknown edge mode: {}", mode))),
     }
 }
 
@@ -131,12 +158,12 @@ async fn deliver_http(
     ctx: &DaemonContext,
     client: &reqwest::Client,
     item: &EdgeConnectorItem,
-) -> Result<(), String> {
+) -> Result<(), DeliveryError> {
     let url = ctx
         .config
         .edge_http_url
         .as_ref()
-        .ok_or("edge_http_url is required for http mode")?;
+        .ok_or_else(|| DeliveryError::non_retryable("edge_http_url is required for http mode".to_string()))?;
 
     let method = ctx.config.edge_http_method.as_deref().unwrap_or("POST");
     let event_type = item
@@ -153,7 +180,7 @@ async fn deliver_http(
     let builder = match method.to_uppercase().as_str() {
         "POST" => client.post(url),
         "PUT" => client.put(url),
-        _ => return Err(format!("unsupported HTTP method: {}", method)),
+        _ => return Err(DeliveryError::non_retryable(format!("unsupported HTTP method: {}", method))),
     };
 
     let response = builder
@@ -164,15 +191,25 @@ async fn deliver_http(
         .json(&item.payload)
         .send()
         .await
-        .map_err(|e| format!("http delivery failed: {}", e))?;
+        .map_err(|e| DeliveryError::retryable(format!("http delivery failed: {}", e)))?;
 
-    if response.status().is_success() {
+    let status = response.status();
+    if status.is_success() {
         Ok(())
+    } else if status.as_u16() == 429 {
+        Err(DeliveryError::retryable(format!(
+            "http delivery returned status 429 (rate limited)"
+        )))
+    } else if status.is_client_error() {
+        Err(DeliveryError::non_retryable(format!(
+            "http delivery returned status {} — skipping item",
+            status
+        )))
     } else {
-        Err(format!(
+        Err(DeliveryError::retryable(format!(
             "http delivery returned status {}",
-            response.status()
-        ))
+            status
+        )))
     }
 }
 
@@ -180,14 +217,14 @@ async fn deliver_kafka(
     ctx: &DaemonContext,
     producer: &rdkafka::producer::FutureProducer,
     item: &EdgeConnectorItem,
-) -> Result<(), String> {
+) -> Result<(), DeliveryError> {
     use rdkafka::producer::FutureRecord;
 
     let topic = ctx
         .config
         .edge_topic
         .as_deref()
-        .ok_or("edge_topic required for kafka mode")?;
+        .ok_or_else(|| DeliveryError::non_retryable("edge_topic required for kafka mode".to_string()))?;
 
     let key = item
         .payload
@@ -196,14 +233,14 @@ async fn deliver_kafka(
         .unwrap_or("")
         .to_string();
     let payload =
-        serde_json::to_string(&item.payload).map_err(|e| format!("serialize failed: {}", e))?;
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     let record = FutureRecord::to(topic).key(&key).payload(&payload);
 
     producer
         .send(record, Duration::from_secs(5))
         .await
-        .map_err(|(e, _)| format!("kafka delivery failed: {}", e))?;
+        .map_err(|(e, _)| DeliveryError::retryable(format!("kafka delivery failed: {}", e)))?;
 
     Ok(())
 }
@@ -213,12 +250,12 @@ async fn deliver_mqtt(
     client: &rumqttc::AsyncClient,
     ack_notify: &tokio::sync::Notify,
     item: &EdgeConnectorItem,
-) -> Result<(), String> {
+) -> Result<(), DeliveryError> {
     let topic = ctx
         .config
         .edge_topic
         .as_deref()
-        .ok_or("edge_topic required for mqtt mode")?;
+        .ok_or_else(|| DeliveryError::non_retryable("edge_topic required for mqtt mode".to_string()))?;
 
     let qos = match ctx.config.mqtt_qos {
         0 => rumqttc::QoS::AtMostOnce,
@@ -227,23 +264,23 @@ async fn deliver_mqtt(
     };
 
     let payload =
-        serde_json::to_vec(&item.payload).map_err(|e| format!("serialize failed: {}", e))?;
+        serde_json::to_vec(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     client
         .publish(topic, qos, false, payload)
         .await
-        .map_err(|e| format!("mqtt delivery failed: {}", e))?;
+        .map_err(|e| DeliveryError::retryable(format!("mqtt delivery failed: {}", e)))?;
 
     if ctx.config.mqtt_qos > 0 {
         tokio::time::timeout(Duration::from_secs(10), ack_notify.notified())
             .await
-            .map_err(|_| "mqtt broker did not acknowledge publish within 10s".to_string())?;
+            .map_err(|_| DeliveryError::retryable("mqtt broker did not acknowledge publish within 10s".to_string()))?;
     }
 
     Ok(())
 }
 
-async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result<(), String> {
+async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result<(), DeliveryError> {
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
 
@@ -251,7 +288,7 @@ async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result
         .config
         .edge_script
         .as_ref()
-        .ok_or("edge_script is required for script mode")?;
+        .ok_or_else(|| DeliveryError::non_retryable("edge_script is required for script mode".to_string()))?;
 
     let event_type = item
         .payload
@@ -270,7 +307,7 @@ async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result
         .unwrap_or("");
 
     let payload =
-        serde_json::to_string(&item.payload).map_err(|e| format!("serialize failed: {}", e))?;
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     let mut child = Command::new(script)
         .stdin(std::process::Stdio::piped())
@@ -279,27 +316,27 @@ async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result
         .env("ILERT_EDGE_ITEM_ID", item.id.to_string())
         .env("ILERT_TIMESTAMP", timestamp)
         .spawn()
-        .map_err(|e| format!("failed to spawn script: {}", e))?;
+        .map_err(|e| DeliveryError::retryable(format!("failed to spawn script: {}", e)))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(payload.as_bytes())
             .await
-            .map_err(|e| format!("failed to write to script stdin: {}", e))?;
+            .map_err(|e| DeliveryError::retryable(format!("failed to write to script stdin: {}", e)))?;
     }
 
     let status = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
-        Ok(result) => result.map_err(|e| format!("script wait failed: {}", e))?,
+        Ok(result) => result.map_err(|e| DeliveryError::retryable(format!("script wait failed: {}", e)))?,
         Err(_) => {
             let _ = child.kill().await;
-            return Err("script execution timed out (30s)".to_string());
+            return Err(DeliveryError::retryable("script execution timed out (30s)".to_string()));
         }
     };
 
     if status.success() {
         Ok(())
     } else {
-        Err(format!("script exited with code {:?}", status.code()))
+        Err(DeliveryError::retryable(format!("script exited with code {:?}", status.code())))
     }
 }
 
@@ -440,6 +477,7 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
     };
 
     let mqtt_ack_notify = Arc::new(tokio::sync::Notify::new());
+    let mut mqtt_eventloop_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mqtt_client: Option<rumqttc::AsyncClient> = if mode == "mqtt" {
         if ctx.config.mqtt_qos == 0 {
             warn!(
@@ -451,7 +489,7 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
 
         let mqtt_ctx = ctx.clone();
         let ack = mqtt_ack_notify.clone();
-        tokio::spawn(async move {
+        mqtt_eventloop_handle = Some(tokio::spawn(async move {
             loop {
                 if !mqtt_ctx.running.load(Ordering::Relaxed) {
                     break;
@@ -471,7 +509,7 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
                     }
                 }
             }
-        });
+        }));
 
         Some(client)
     } else {
@@ -479,6 +517,7 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
     };
 
     let mut last_processed_id: Option<i64> = None;
+    let mut consecutive_poll_failures: u32 = 0;
 
     if let Some(ref probe) = ctx.edge_connector_probe {
         probe.polling.store(true, Ordering::Relaxed);
@@ -501,6 +540,16 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
             break;
         }
 
+        if let Some(ref handle) = mqtt_eventloop_handle {
+            if handle.is_finished() {
+                error!("MQTT event loop exited unexpectedly, shutting down edge connector");
+                if let Some(ref probe) = ctx.edge_connector_probe {
+                    probe.record_error("MQTT event loop exited unexpectedly".to_string());
+                }
+                break;
+            }
+        }
+
         let result = poll_items(
             &http_client,
             &base_url,
@@ -515,6 +564,8 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
 
         match result {
             Ok(response) => {
+                consecutive_poll_failures = 0;
+
                 if let Some(ref probe) = ctx.edge_connector_probe {
                     probe.clear_error();
                 }
@@ -553,10 +604,22 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
                                 probe.items_delivered.fetch_add(1, Ordering::Relaxed);
                             }
                         }
+                        Err(e) if !e.retryable => {
+                            warn!(
+                                "Edge connector delivery non-retryable for item {}: {}",
+                                item.id, e.message
+                            );
+                            cursor_id = item.id;
+                            last_processed_id = Some(item.id);
+
+                            if !ha_mode {
+                                save_cursor(&ctx, &cursor_key, cursor_id).await;
+                            }
+                        }
                         Err(e) => {
-                            error!("Edge connector delivery failed: {}", e);
+                            error!("Edge connector delivery failed (retryable): {}", e.message);
                             if let Some(ref probe) = ctx.edge_connector_probe {
-                                probe.record_error(e);
+                                probe.record_error(e.message);
                             }
                             delivery_failed = true;
                             break;
@@ -578,10 +641,20 @@ pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
                 consecutive_repolls = 0;
             }
             Err(e) => {
-                error!("Edge connector poll failed: {}", e);
+                consecutive_poll_failures += 1;
+                let backoff = std::cmp::min(
+                    BACKOFF_BASE_SECS * 2u64.saturating_pow(consecutive_poll_failures - 1),
+                    BACKOFF_MAX_SECS,
+                );
+                error!(
+                    "Edge connector poll failed (attempt {}, backoff {}s): {}",
+                    consecutive_poll_failures, backoff, e
+                );
                 if let Some(ref probe) = ctx.edge_connector_probe {
                     probe.record_error(e);
                 }
+                interruptible_sleep(&ctx, backoff).await;
+                continue;
             }
         }
 
