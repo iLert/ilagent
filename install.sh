@@ -14,9 +14,8 @@ curl_download_file() {
   local url="$1"
   local output_path="$2"
 
-  if [ -t 1 ]; then
-    curl --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 --progress-bar "$url" --output "$output_path"
-    echo ""
+  if [ -t 2 ]; then
+    curl --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$url" --output "$output_path"
   else
     curl --silent --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$url" --output "$output_path"
   fi
@@ -27,6 +26,7 @@ if [ -z "$VERSION" ]; then
   echo "Failed to determine latest release version."
   exit 1
 fi
+echo "Installing ilagent version ${VERSION}"
 
 # Prompt user to run a command with sudo; show exact command first
 run_with_sudo_prompt() {
