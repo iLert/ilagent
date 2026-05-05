@@ -336,6 +336,7 @@ async fn event_poll_max_retries_drops_event() {
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe: None,
+        edge_connector_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();
@@ -396,6 +397,7 @@ async fn event_poll_unlimited_retries_keeps_event() {
         running: AtomicBool::new(true),
         mqtt_probe: None,
         kafka_probe: None,
+        edge_connector_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();

@@ -7,6 +7,7 @@ pub const CALLER_AGENT: &str = concat!("ilagent/", env!("CARGO_PKG_VERSION"));
 pub mod config;
 pub mod consumers;
 pub mod db;
+pub mod edge_connector;
 pub mod hbt;
 pub mod http_server;
 pub mod json_util;
@@ -102,6 +103,42 @@ impl KafkaProbeState {
     }
 }
 
+pub struct EdgeConnectorProbeState {
+    pub polling: AtomicBool,
+    pub items_delivered: std::sync::atomic::AtomicU64,
+    pub last_error: std::sync::Mutex<Option<String>>,
+}
+
+impl EdgeConnectorProbeState {
+    pub fn new() -> Self {
+        Self {
+            polling: AtomicBool::new(false),
+            items_delivered: std::sync::atomic::AtomicU64::new(0),
+            last_error: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.polling.load(Ordering::Relaxed) && self.last_error().is_none()
+    }
+
+    pub fn record_error(&self, error: String) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = Some(error);
+        }
+    }
+
+    pub fn clear_error(&self) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = None;
+        }
+    }
+
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|e| e.clone())
+    }
+}
+
 pub struct DaemonContext {
     pub config: config::ILConfig,
     pub db: Mutex<db::ILDatabase>,
@@ -109,4 +146,5 @@ pub struct DaemonContext {
     pub running: AtomicBool,
     pub mqtt_probe: Option<MqttProbeState>,
     pub kafka_probe: Option<KafkaProbeState>,
+    pub edge_connector_probe: Option<EdgeConnectorProbeState>,
 }

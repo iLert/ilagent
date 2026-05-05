@@ -1,5 +1,23 @@
 # ilagent CHANGELOG
 
+## 2026-05-05, Version 0.10.0
+
+* added **edge connector mode** (`--edge_mode`) — a new exclusive daemon mode that polls the ilert edge-connections API and delivers events to a local target via HTTP, Kafka, MQTT, or script execution
+* edge connector supports HTTP delivery (`--edge_mode http`) with configurable target URL and method, custom headers (`X-ilert-Event-Type`, `X-ilert-Alert-Id`, `X-ilert-Edge-Item-Id`)
+* edge connector supports Kafka delivery (`--edge_mode kafka`) producing to a configurable topic via `--edge_topic`
+* edge connector supports MQTT delivery (`--edge_mode mqtt`) publishing to a configurable topic with QoS-aware broker acknowledgement
+* edge connector supports script delivery (`--edge_mode script`) piping event JSON to stdin with metadata in environment variables, 30s execution timeout with kill on expiry
+* cursor-based at-least-once delivery with per-integration-key SQLite persistence, immediate re-poll on full batches (capped at 10 consecutive re-polls to prevent starvation)
+* high availability mode (`--edge_cluster_id`, `--edge_instance_id`) with server-managed leader election and standby polling
+* exponential backoff on poll failures (5s base, capped at 300s), resets on success
+* non-retryable HTTP delivery errors (4xx except 429) skip the item and advance the cursor instead of blocking the queue permanently
+* 429 (rate limited) and 5xx responses are retryable — batch stops and retries on next cycle
+* MQTT event loop supervision — if the event loop exits unexpectedly, the edge connector detects it and initiates shutdown
+* readiness endpoint (`/ready`) reports edge connector health when `--port` is used alongside `--edge_mode`
+* heartbeat (`--heartbeat`) is supported in edge connector mode for service-level liveness pings
+* `--edge_poll_interval` and `--edge_standby_interval` default to 10s, validated to [5, 120] seconds
+* eased permission requirements in the install script
+
 ## 2026-05-02, Version 0.9.0
 
 * **BREAKING** removed the `cleanup` subcommand — this functionality has moved to the new `ilert` CLI tool (github.com/iLert/ilert-cli)

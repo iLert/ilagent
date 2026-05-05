@@ -72,7 +72,8 @@ async fn e2e_post_event_poll_deliver_and_delete() {
         let event = events[0].clone();
 
         // create a separate ilert client pointing at mock
-        let client = ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
+        let client =
+            ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
         (event, client)
     };
 

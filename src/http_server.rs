@@ -67,6 +67,17 @@ async fn get_ready(
         }
     }
 
+    if let Some(ref probe) = ctx.edge_connector_probe {
+        if !probe.is_ready() {
+            let error = probe.last_error().unwrap_or_default();
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "component": "edge_connector",
+                "polling": false,
+                "error": error,
+            }));
+        }
+    }
+
     HttpResponse::NoContent().finish()
 }
 

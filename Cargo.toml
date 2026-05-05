@@ -1,6 +1,6 @@
 [package]
 name = "ilagent"
-version = "0.9.0"
+version = "0.10.0"
 authors = ["Chris Froehlingsdorf <chris@ilert.com>"]
 edition = "2024"
 
@@ -23,9 +23,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 rdkafka = { version = "0.39", features = ["cmake-build"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+ring = "0.17"
 
 [dev-dependencies]
 actix-rt = "2"
 tempfile = "3"
 wiremock = "0.6"
 testcontainers = "0.23"
+futures = "0.3"

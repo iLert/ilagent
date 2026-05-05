@@ -140,14 +140,14 @@ pub fn build_event_api_path(integration_key: &str) -> String {
     super::build_event_api_path("mqtt", integration_key)
 }
 
-struct TlsMaterial {
+pub(crate) struct TlsMaterial {
     ca: Vec<u8>,
     client_auth: Option<(Vec<u8>, Vec<u8>)>,
     fingerprint: u64,
 }
 
 impl TlsMaterial {
-    fn try_load(config: &ILConfig) -> Result<Option<TlsMaterial>, String> {
+    pub(crate) fn try_load(config: &ILConfig) -> Result<Option<TlsMaterial>, String> {
         let ca = match &config.mqtt_ca_path {
             Some(path) => std::fs::read(path)
                 .map_err(|e| format!("Failed to read MQTT CA certificate file {}: {}", path, e))?,
@@ -184,7 +184,7 @@ impl TlsMaterial {
         }))
     }
 
-    fn try_into_transport(self) -> Result<Transport, String> {
+    pub(crate) fn try_into_transport(self) -> Result<Transport, String> {
         let mut root_store = RootCertStore::empty();
         let ca_certs: Vec<_> = rustls_pemfile::certs(&mut &self.ca[..])
             .collect::<Result<Vec<_>, _>>()
@@ -476,8 +476,7 @@ pub fn run_mqtt_job(daemon_ctx: Arc<DaemonContext>) -> () {
                             .iter()
                             .any(|rc| matches!(rc, SubscribeReasonCode::Failure));
                         if has_failure {
-                            let err =
-                                format!("Subscription rejected: {:?}", suback.return_codes);
+                            let err = format!("Subscription rejected: {:?}", suback.return_codes);
                             error!("MQTT {}", err);
                             probe.record_error(err);
                         } else {

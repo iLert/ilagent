@@ -35,9 +35,6 @@ install_binary() {
   local tmp_file="$1"
   local install_uri="$2"
 
-  # Remove existing binary if present
-  rm -f "$install_uri" 2>/dev/null || sudo rm -f "$install_uri" 2>/dev/null || true
-
   # Try to move without sudo
   if mv "$tmp_file" "$install_uri" 2>/dev/null; then
     :
@@ -55,7 +52,7 @@ install_binary() {
 
 TEMP_DIR=$(mktemp -d)
 TEMP_FILE="${TEMP_DIR}/ilagent"
-trap 'rm -rf "$TEMP_DIR"' EXIT
+trap 'rmdir "$TEMP_DIR" 2>/dev/null || true' EXIT
 
 if [ "$(uname)" == "Darwin" ]; then
 
