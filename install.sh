@@ -6,7 +6,15 @@ else
   set -o xtrace
 fi
 
-VERSION=$(curl -sI https://github.com/iLert/ilagent/releases/latest | grep -i '^location:' | sed 's|.*/||' | tr -d '\r\n')
+curl_fetch_headers() {
+  curl --silent --show-error --location --head --connect-timeout 10 --max-time 30 "$1"
+}
+
+curl_download_file() {
+  curl --silent --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$1" --output "$2"
+}
+
+VERSION=$(curl_fetch_headers "https://github.com/iLert/ilagent/releases/latest" | grep -i '^location:' | sed 's|.*/||' | tr -d '\r\n')
 if [ -z "$VERSION" ]; then
   echo "Failed to determine latest release version."
   exit 1
@@ -77,7 +85,10 @@ if [ "$(uname)" == "Darwin" ]; then
   INSTALL_URI=$(resolve_install_uri "/usr/local/bin/ilagent")
   FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_mac"
   echo "[MacOS] Downloading binary.. please be patient."
-  curl -sLS "$FILE_URL" --output "$TEMP_FILE"
+  if ! curl_download_file "$FILE_URL" "$TEMP_FILE"; then
+    echo "Download failed or timed out. Please check your network connection and try again."
+    exit 1
+  fi
   install_binary "$TEMP_FILE" "$INSTALL_URI"
   echo "Done"
   ilagent --help
@@ -88,7 +99,10 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     INSTALL_URI=$(resolve_install_uri "/usr/bin/ilagent")
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_arm"
     echo "[ARM] Downloading binary.. please be patient."
-    curl -sLS "$FILE_URL" --output "$TEMP_FILE"
+    if ! curl_download_file "$FILE_URL" "$TEMP_FILE"; then
+      echo "Download failed or timed out. Please check your network connection and try again."
+      exit 1
+    fi
     install_binary "$TEMP_FILE" "$INSTALL_URI"
     echo "Done"
     ilagent --help
@@ -96,7 +110,10 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     INSTALL_URI=$(resolve_install_uri "/usr/bin/ilagent")
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_linux"
     echo "[Linux] Downloading binary.. please be patient."
-    curl -sLS "$FILE_URL" --output "$TEMP_FILE"
+    if ! curl_download_file "$FILE_URL" "$TEMP_FILE"; then
+      echo "Download failed or timed out. Please check your network connection and try again."
+      exit 1
+    fi
     install_binary "$TEMP_FILE" "$INSTALL_URI"
     echo "Done"
     ilagent --help
