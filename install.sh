@@ -15,8 +15,13 @@ fi
 # Prompt user to run a command with sudo; show exact command first
 run_with_sudo_prompt() {
   local cmd="$1"
+  local reason="$2"
   echo ""
-  echo "Insufficient permissions. The following command needs to be run with sudo:"
+  if [ -n "$reason" ]; then
+    echo "$reason"
+  fi
+  echo "This usually needs administrator privileges."
+  echo "The installer can continue by running:"
   echo "  sudo $cmd"
   read -r -p "Run with sudo? [y/N] " answer </dev/tty
   case "$answer" in
@@ -39,14 +44,27 @@ install_binary() {
   if mv "$tmp_file" "$install_uri" 2>/dev/null; then
     :
   else
-    run_with_sudo_prompt "mv '$tmp_file' '$install_uri'"
+    run_with_sudo_prompt "mv '$tmp_file' '$install_uri'" "Cannot write to '$install_uri' with current user permissions."
   fi
 
   # Try to chmod without sudo
   if chmod 755 "$install_uri" 2>/dev/null; then
     :
   else
-    run_with_sudo_prompt "chmod 755 '$install_uri'"
+    run_with_sudo_prompt "chmod 755 '$install_uri'" "Cannot update executable permissions for '$install_uri' with current user permissions."
+  fi
+}
+
+# Prefer ~/.local/bin if it exists in $PATH, creating it if needed
+resolve_install_uri() {
+  local fallback="$1"
+  local local_bin="${HOME}/.local/bin"
+
+  if echo "$PATH" | tr ':' '\n' | grep -qx "$local_bin"; then
+    mkdir -p "$local_bin"
+    echo "$local_bin/ilagent"
+  else
+    echo "$fallback"
   fi
 }
 
@@ -56,7 +74,7 @@ trap 'rmdir "$TEMP_DIR" 2>/dev/null || true' EXIT
 
 if [ "$(uname)" == "Darwin" ]; then
 
-  INSTALL_URI="/usr/local/bin/ilagent"
+  INSTALL_URI=$(resolve_install_uri "/usr/local/bin/ilagent")
   FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_mac"
   echo "[MacOS] Downloading binary.. please be patient."
   curl -sLS "$FILE_URL" --output "$TEMP_FILE"
@@ -67,7 +85,7 @@ if [ "$(uname)" == "Darwin" ]; then
 elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
 
   if [ "$(expr substr $(uname -m) 1 3)" == "arm" ]; then
-    INSTALL_URI="/usr/bin/ilagent"
+    INSTALL_URI=$(resolve_install_uri "/usr/bin/ilagent")
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_arm"
     echo "[ARM] Downloading binary.. please be patient."
     curl -sLS "$FILE_URL" --output "$TEMP_FILE"
@@ -75,7 +93,7 @@ elif [ "$(expr substr $(uname -s) 1 5)" == "Linux" ]; then
     echo "Done"
     ilagent --help
   else
-    INSTALL_URI="/usr/bin/ilagent"
+    INSTALL_URI=$(resolve_install_uri "/usr/bin/ilagent")
     FILE_URL="https://github.com/iLert/ilagent/releases/download/${VERSION}/ilagent_linux"
     echo "[Linux] Downloading binary.. please be patient."
     curl -sLS "$FILE_URL" --output "$TEMP_FILE"
