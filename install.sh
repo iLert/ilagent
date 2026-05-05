@@ -13,11 +13,16 @@ curl_fetch_headers() {
 curl_download_file() {
   local url="$1"
   local output_path="$2"
+  local download_connect_timeout=10
+  local download_max_time=600
+  local download_retry_count=2
+  local download_retry_delay=2
+  local download_retry_max_time=620
 
   if [ -t 2 ]; then
-    curl --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$url" --output "$output_path"
+    curl --show-error --location --fail --connect-timeout "$download_connect_timeout" --max-time "$download_max_time" --retry "$download_retry_count" --retry-delay "$download_retry_delay" --retry-max-time "$download_retry_max_time" "$url" --output "$output_path"
   else
-    curl --silent --show-error --location --fail --connect-timeout 10 --max-time 180 --retry 2 --retry-delay 2 "$url" --output "$output_path"
+    curl --silent --show-error --location --fail --connect-timeout "$download_connect_timeout" --max-time "$download_max_time" --retry "$download_retry_count" --retry-delay "$download_retry_delay" --retry-max-time "$download_retry_max_time" "$url" --output "$output_path"
   fi
 }
 
