@@ -360,8 +360,6 @@ async fn main() {
 }
 
 const EDGE_REJECTED_STRING_ARGS: &[&str] = &[
-    "port",
-    "heartbeat",
     "event_topic",
     "heartbeat_topic",
     "policy_topic",
@@ -422,6 +420,18 @@ fn build_edge_daemon_config(
                 arg
             );
         }
+    }
+
+    let default_port = config.get_port_as_string().clone();
+    config.start_http = matches.get_one::<String>("port").is_some();
+    let port = matches
+        .get_one::<String>("port")
+        .map(|s| s.as_str())
+        .unwrap_or(default_port.as_str());
+    config.set_port_from_str(port);
+
+    if let Some(heartbeat_key) = matches.get_one::<String>("heartbeat") {
+        config.heartbeat_key = Some(heartbeat_key.to_string());
     }
 
     config.edge_connector_key = Some(edge_key.to_string());
@@ -803,14 +813,51 @@ async fn run_edge_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILert)
     })
     .expect("Error setting Ctrl-C handler");
 
+    let mut hbt_job = None;
+    if config.heartbeat_key.is_some() {
+        info!("Running regular heartbeats..");
+        let cloned_ctx = daemon_ctx.clone();
+        hbt_job = Some(tokio::spawn(async move {
+            hbt::run_hbt_job(cloned_ctx).await;
+        }));
+    }
+
     info!("Starting edge connector..");
     let cloned_ctx = daemon_ctx.clone();
-    let handle = tokio::spawn(async move {
+    let edge_handle = tokio::spawn(async move {
         edge_connector::run_edge_connector_job(cloned_ctx).await;
     });
 
-    handle.await.expect("Failed to join edge connector thread");
-    debug!("edge connector ended");
+    if config.start_http {
+        let http_ctx = daemon_ctx.clone();
+        let http_handle = tokio::spawn(async move {
+            http_server::run_server(http_ctx).await;
+        });
+
+        tokio::select! {
+            _ = http_handle => {
+                debug!("http ended");
+            }
+            result = edge_handle => {
+                if daemon_ctx.running.load(Ordering::Relaxed) {
+                    error!("Edge connector exited unexpectedly, initiating shutdown");
+                }
+                if let Err(e) = result {
+                    error!("Edge connector panicked: {:?}", e);
+                }
+            }
+        }
+
+        daemon_ctx.running.store(false, Ordering::Relaxed);
+    } else {
+        edge_handle.await.expect("Failed to join edge connector thread");
+        debug!("edge connector ended");
+    }
+
+    if let Some(handle) = hbt_job {
+        handle.await.expect("Failed to join heartbeat thread");
+        debug!("hbt ended");
+    }
 }
 
 async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILert) {
@@ -1672,36 +1719,31 @@ mod tests {
             assert!(msg.contains("--edge_script is required"), "got: {}", msg);
         }
 
-        // rejects port
+        // port enables http server
         {
-            let result = std::panic::catch_unwind(|| {
-                let m = build_cli()
-                    .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "-p", "8080",
-                    ])
-                    .unwrap();
-                let sub = m.subcommand_matches("daemon").unwrap();
-                build_daemon_config(sub, &m);
-            });
-            let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                    "http://localhost/webhook", "-p", "8080",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert!(config.start_http);
+            assert_eq!(config.http_port, 8080);
         }
 
-        // rejects heartbeat
+        // heartbeat enabled
         {
-            let result = std::panic::catch_unwind(|| {
-                let m = build_cli()
-                    .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "-b", "hbt-key",
-                    ])
-                    .unwrap();
-                let sub = m.subcommand_matches("daemon").unwrap();
-                build_daemon_config(sub, &m);
-            });
-            let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                    "http://localhost/webhook", "-b", "hbt-key",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.heartbeat_key.as_deref().unwrap(), "hbt-key");
         }
 
         // rejects event topic
