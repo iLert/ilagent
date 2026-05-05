@@ -1,5 +1,9 @@
 # ilagent CHANGELOG
 
+## 2026-05-05, Version 0.10.1
+
+* added **stdout** edge connector delivery mode (`--edge_mode stdout`) — prints each polled event's JSON payload to stdout, useful for testing, debugging, or piping into other tools; no additional configuration required
+
 ## 2026-05-05, Version 0.10.0
 
 * added **edge connector mode** (`--edge_mode`) — a new exclusive daemon mode that polls the ilert edge-connections API and delivers events to a local target via HTTP, Kafka, MQTT, or script execution
