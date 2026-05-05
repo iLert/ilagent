@@ -150,6 +150,7 @@ async fn deliver_item(
             .await
         }
         "script" => deliver_script(ctx, item).await,
+        "stdout" => deliver_stdout(item),
         _ => Err(DeliveryError::non_retryable(format!("unknown edge mode: {}", mode))),
     }
 }
@@ -277,6 +278,13 @@ async fn deliver_mqtt(
             .map_err(|_| DeliveryError::retryable("mqtt broker did not acknowledge publish within 10s".to_string()))?;
     }
 
+    Ok(())
+}
+
+fn deliver_stdout(item: &EdgeConnectorItem) -> Result<(), DeliveryError> {
+    let payload =
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
+    println!("{}", payload);
     Ok(())
 }
 
@@ -413,8 +421,9 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
                 panic!("--edge_script is required when edge_mode is 'script'");
             }
         }
+        "stdout" => {}
         _ => panic!(
-            "Unknown edge_mode '{}', expected: http, kafka, mqtt, script",
+            "Unknown edge_mode '{}', expected: http, kafka, mqtt, script, stdout",
             mode
         ),
     }

@@ -1201,3 +1201,59 @@ async fn edge_connector_mqtt_delivery() {
         "1"
     );
 }
+
+#[tokio::test]
+async fn edge_connector_delivers_via_stdout() {
+    let poll_server = MockServer::start().await;
+
+    let items = vec![
+        poll_item(1, "alert-created", "200", "Disk full"),
+        poll_item(2, "alert-resolved", "200", "Disk cleared"),
+    ];
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "0"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(items)))
+        .expect(1)
+        .mount(&poll_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
+        .up_to_n_times(5)
+        .mount(&poll_server)
+        .await;
+
+    let mut config = ILConfig::new();
+    config.edge_connector_key = Some("iec1:stdout-test".to_string());
+    config.edge_mode = Some("stdout".to_string());
+    config.edge_poll_interval = 1;
+    config.edge_api_host = Some(poll_server.uri());
+    config.db_file = tempfile::NamedTempFile::new()
+        .unwrap()
+        .path()
+        .to_string_lossy()
+        .to_string();
+
+    let ctx = build_ctx(config);
+
+    let job_ctx = ctx.clone();
+    let handle = tokio::spawn(async move {
+        run_edge_connector_job(job_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    ctx.running.store(false, Ordering::Relaxed);
+    handle.await.unwrap();
+
+    let probe = ctx.edge_connector_probe.as_ref().unwrap();
+    assert!(probe.is_ready());
+    assert_eq!(probe.items_delivered.load(Ordering::Relaxed), 2);
+
+    let db = ctx.db.lock().await;
+    let cursor = db.get_il_value(&cursor_db_key("iec1:stdout-test")).unwrap();
+    assert_eq!(cursor, "2");
+}

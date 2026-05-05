@@ -31,6 +31,10 @@ ILERT_EDGE_CONNECTOR_KEY='iec1...' ilagent daemon -v -v -p 8977 \
 #     --mqtt_qos 1 \
 #     --edge_topic edge/events
 
+# Stdout delivery (for testing / debugging)
+# ilagent daemon -v -v -p 8977 \
+#     --edge_mode stdout
+
 # With heartbeat for service liveness
 # ilagent daemon -v -v -p 8977 -b il1hbt123 \
 #     --edge_mode http \

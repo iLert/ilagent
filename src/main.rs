@@ -191,7 +191,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("edge_mode")
             .long("edge_mode")
             .value_name("MODE")
-            .value_parser(["http", "kafka", "mqtt", "script"])
+            .value_parser(["http", "kafka", "mqtt", "script", "stdout"])
             .help("Edge connector delivery mode (default: http)"))
         .arg(Arg::new("edge_http_url")
             .long("edge_http_url")
@@ -1574,6 +1574,23 @@ mod tests {
             assert_eq!(config.edge_mode.unwrap(), "kafka");
             assert_eq!(config.kafka_brokers.unwrap(), "localhost:9092");
             assert_eq!(config.edge_topic.unwrap(), "edge-events");
+        }
+
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "stdout",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+            assert_eq!(config.edge_mode.as_deref().unwrap(), "stdout");
+            assert!(config.edge_http_url.is_none());
+            assert!(config.edge_topic.is_none());
+            assert!(config.edge_script.is_none());
         }
 
         // ha mode
