@@ -1,5 +1,9 @@
 # ilagent CHANGELOG
 
+## 2026-05-06, Version 0.10.2
+
+* added optional authentication header for edge connector HTTP delivery (`--edge_http_auth_header`, `--edge_http_auth_value`) — the value can be set via `ILERT_EDGE_HTTP_AUTH_VALUE` env var to avoid exposing secrets in process listings
+
 ## 2026-05-05, Version 0.10.1
 
 * added **stdout** edge connector delivery mode (`--edge_mode stdout`) — prints each polled event's JSON payload to stdout, useful for testing, debugging, or piping into other tools; no additional configuration required

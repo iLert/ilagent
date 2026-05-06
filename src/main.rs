@@ -201,6 +201,14 @@ pub fn build_cli() -> Command {
             .long("edge_http_method")
             .value_name("METHOD")
             .help("HTTP method for http delivery mode (default: POST)"))
+        .arg(Arg::new("edge_http_auth_header")
+            .long("edge_http_auth_header")
+            .value_name("HEADER")
+            .help("Header name for HTTP delivery authentication (e.g. Authorization, X-API-Key)"))
+        .arg(Arg::new("edge_http_auth_value")
+            .long("edge_http_auth_value")
+            .value_name("VALUE")
+            .help("Auth header value for HTTP delivery (falls back to ILERT_EDGE_HTTP_AUTH_VALUE env var)"))
         .arg(Arg::new("edge_topic")
             .long("edge_topic")
             .value_name("TOPIC")
@@ -456,6 +464,13 @@ fn build_edge_daemon_config(
     config.edge_http_method = matches
         .get_one::<String>("edge_http_method")
         .map(|s| s.to_string());
+    config.edge_http_auth_header = matches
+        .get_one::<String>("edge_http_auth_header")
+        .map(|s| s.to_string());
+    config.edge_http_auth_value = matches
+        .get_one::<String>("edge_http_auth_value")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("ILERT_EDGE_HTTP_AUTH_VALUE").ok());
     config.edge_topic = matches
         .get_one::<String>("edge_topic")
         .map(|s| s.to_string());

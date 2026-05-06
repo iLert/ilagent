@@ -184,11 +184,20 @@ async fn deliver_http(
         _ => return Err(DeliveryError::non_retryable(format!("unsupported HTTP method: {}", method))),
     };
 
-    let response = builder
+    let mut builder = builder
         .header("Content-Type", "application/json")
         .header("X-ilert-Event-Type", event_type)
         .header("X-ilert-Alert-Id", alert_id)
-        .header("X-ilert-Edge-Item-Id", item.id.to_string())
+        .header("X-ilert-Edge-Item-Id", item.id.to_string());
+
+    if let (Some(header_name), Some(header_value)) = (
+        ctx.config.edge_http_auth_header.as_ref(),
+        ctx.config.edge_http_auth_value.as_ref(),
+    ) {
+        builder = builder.header(header_name, header_value);
+    }
+
+    let response = builder
         .json(&item.payload)
         .send()
         .await
@@ -398,6 +407,9 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
         "http" => {
             if config.edge_http_url.is_none() {
                 panic!("--edge_http_url is required when edge_mode is 'http'");
+            }
+            if config.edge_http_auth_header.is_some() && config.edge_http_auth_value.is_none() {
+                panic!("--edge_http_auth_header requires an auth value via --edge_http_auth_value or ILERT_EDGE_HTTP_AUTH_VALUE env var");
             }
         }
         "kafka" => {

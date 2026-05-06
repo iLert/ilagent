@@ -58,6 +58,8 @@ pub struct ILConfig {
     pub edge_instance_id: Option<String>,
     pub edge_standby_interval: u64,
     pub edge_api_host: Option<String>,
+    pub edge_http_auth_header: Option<String>,
+    pub edge_http_auth_value: Option<String>,
 }
 
 impl ILConfig {
@@ -113,6 +115,8 @@ impl ILConfig {
             edge_instance_id: None,
             edge_standby_interval: 10,
             edge_api_host: None,
+            edge_http_auth_header: None,
+            edge_http_auth_value: None,
         }
     }
 

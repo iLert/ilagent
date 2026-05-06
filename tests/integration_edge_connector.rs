@@ -924,6 +924,65 @@ async fn edge_connector_ha_standby_keeps_readiness_healthy() {
     );
 }
 
+#[tokio::test]
+async fn edge_connector_delivers_custom_auth_header() {
+    let poll_server = MockServer::start().await;
+    let delivery_server = MockServer::start().await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "0"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(poll_response(vec![poll_item(
+                1,
+                "alert-created",
+                "500",
+                "auth header test",
+            )])),
+        )
+        .expect(1)
+        .mount(&poll_server)
+        .await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/edge-connections/events"))
+        .and(query_param("after-id", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(poll_response(vec![])))
+        .up_to_n_times(5)
+        .mount(&poll_server)
+        .await;
+
+    Mock::given(method("POST"))
+        .and(header("X-API-Key", "my-secret-token"))
+        .and(header("Content-Type", "application/json"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&delivery_server)
+        .await;
+
+    let mut config = build_edge_config(
+        &poll_server.uri(),
+        &format!("{}/webhook", delivery_server.uri()),
+        "iec1:auth-header-key",
+    );
+    config.edge_http_auth_header = Some("X-API-Key".to_string());
+    config.edge_http_auth_value = Some("my-secret-token".to_string());
+
+    let ctx = build_ctx(config);
+
+    let job_ctx = ctx.clone();
+    let handle = tokio::spawn(async move {
+        run_edge_connector_job(job_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    ctx.running.store(false, Ordering::Relaxed);
+    handle.await.unwrap();
+
+    let probe = ctx.edge_connector_probe.as_ref().unwrap();
+    assert_eq!(probe.items_delivered.load(Ordering::Relaxed), 1);
+}
+
 // --- Kafka edge delivery tests ---
 
 fn find_free_port() -> u16 {
