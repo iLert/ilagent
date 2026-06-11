@@ -335,6 +335,10 @@ mod tests {
             images: None,
             links: None,
             customDetails: None,
+            labels: None,
+            severity: None,
+            routingKey: None,
+            services: None,
         };
         let event = EventQueueItemJson::from_transition(trans);
         assert_eq!(event.integrationKey, "");
@@ -356,6 +360,10 @@ mod tests {
             images: None,
             links: None,
             customDetails: Some(serde_json::json!({"env": "prod", "host": "srv1"})),
+            labels: None,
+            severity: None,
+            routingKey: None,
+            services: None,
         };
 
         let db_item =
@@ -376,5 +384,220 @@ mod tests {
         let cd = restored.customDetails.unwrap();
         assert_eq!(cd["env"], "prod");
         assert_eq!(cd["host"], "srv1");
+    }
+
+    // --- labels ---
+
+    #[test]
+    fn parse_event_payload_native_labels() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "labels": {"env": "prod", "dc": "eu"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        let labels = event.labels.unwrap();
+        assert_eq!(labels.get("env").unwrap(), "prod");
+        assert_eq!(labels.get("dc").unwrap(), "eu");
+    }
+
+    #[test]
+    fn parse_event_map_key_label_extracts_and_merges() {
+        let mut config = default_config();
+        config.map_key_labels = vec!["region=data.region".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "labels": {"env": "prod"}, "data": {"region": "eu-central-1"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        let labels = event.labels.unwrap();
+        // payload-native label preserved
+        assert_eq!(labels.get("env").unwrap(), "prod");
+        // mapped label added
+        assert_eq!(labels.get("region").unwrap(), "eu-central-1");
+    }
+
+    #[test]
+    fn parse_event_map_key_label_overrides_payload_on_conflict() {
+        let mut config = default_config();
+        config.map_key_labels = vec!["env=data.realEnv".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "labels": {"env": "stale"}, "data": {"realEnv": "prod"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.labels.unwrap().get("env").unwrap(), "prod");
+    }
+
+    #[test]
+    fn parse_event_map_key_label_non_string_skipped() {
+        let mut config = default_config();
+        config.map_key_labels = vec!["count=data.count".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"count": 5}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        // non-string mapped value is skipped, no labels produced
+        assert!(event.labels.is_none());
+    }
+
+    // --- severity ---
+
+    #[test]
+    fn parse_event_payload_native_severity() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 3}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 3);
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_from_number() {
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"sev": 4}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 4);
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_from_string() {
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"sev": "2"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_out_of_range_dropped() {
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"sev": 9}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(event.severity.is_none());
+    }
+
+    #[test]
+    fn parse_event_payload_native_severity_out_of_range_dropped() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 0}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(event.severity.is_none());
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_valid_overrides_native() {
+        // mapped source is authoritative: a valid mapped value replaces payload-native
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": 4}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 4);
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_out_of_range_clears_native() {
+        // mapped source resolves a value but it is out of range — payload-native must NOT win
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": 9}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(
+            event.severity.is_none(),
+            "invalid mapped severity must clear the payload-native value, not fall back to it"
+        );
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_non_integer_clears_native() {
+        // mapped source resolves a non-integer value — payload-native must NOT win
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": "high"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(event.severity.is_none());
+    }
+
+    #[test]
+    fn parse_event_map_key_severity_absent_path_keeps_native() {
+        // mapped path resolves nothing (key absent) — there is nothing to override with,
+        // so the payload-native value survives (consistent with the other map_key_* fields)
+        let mut config = default_config();
+        config.map_key_severity = Some("data.sev".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 2);
+    }
+
+    // --- routingKey ---
+
+    #[test]
+    fn parse_event_payload_native_routing_key() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "routingKey": "team-alpha"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.routingKey.unwrap(), "team-alpha");
+    }
+
+    #[test]
+    fn parse_event_map_key_routing_key_extracts() {
+        let mut config = default_config();
+        config.map_key_routing_key = Some("data.team".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"team": "team-beta"}}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.routingKey.unwrap(), "team-beta");
+    }
+
+    // --- services (payload-native) ---
+
+    #[test]
+    fn parse_event_payload_native_services() {
+        let config = default_config();
+        let payload =
+            r#"{"apiKey": "k1", "summary": "s", "services": [{"alias": "web"}, {"id": 42}]}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        let services = event.services.unwrap();
+        assert_eq!(services.len(), 2);
+        assert_eq!(services[0].alias.as_ref().unwrap(), "web");
+        assert_eq!(services[1].id.unwrap(), 42);
+    }
+
+    // --- to_db / from_db round-trip for new fields ---
+
+    #[test]
+    fn to_db_and_from_db_round_trip_new_fields() {
+        use ilert::ilert_builders::EventServiceRef;
+        use std::collections::HashMap;
+
+        let mut labels = HashMap::new();
+        labels.insert("env".to_string(), "prod".to_string());
+        labels.insert("dc".to_string(), "eu".to_string());
+
+        let original = EventQueueItemJson {
+            integrationKey: "key1".to_string(),
+            eventType: "ALERT".to_string(),
+            summary: "broke".to_string(),
+            details: None,
+            alertKey: None,
+            priority: None,
+            images: None,
+            links: None,
+            customDetails: None,
+            labels: Some(labels),
+            severity: Some(3),
+            routingKey: Some("team-x".to_string()),
+            services: Some(vec![
+                EventServiceRef::new("web"),
+                EventServiceRef::new_with_id(7),
+            ]),
+        };
+
+        let db_item = EventQueueItemJson::to_db(original.clone(), None);
+        // severity persists as integer
+        assert_eq!(db_item.severity.unwrap(), 3);
+        assert_eq!(db_item.routing_key.as_ref().unwrap(), "team-x");
+        assert!(db_item.labels.is_some());
+        assert!(db_item.services.is_some());
+
+        let restored = EventQueueItemJson::from_db(db_item);
+        let restored_labels = restored.labels.unwrap();
+        assert_eq!(restored_labels.get("env").unwrap(), "prod");
+        assert_eq!(restored_labels.get("dc").unwrap(), "eu");
+        assert_eq!(restored.severity.unwrap(), 3);
+        assert_eq!(restored.routingKey.unwrap(), "team-x");
+        let restored_services = restored.services.unwrap();
+        assert_eq!(restored_services.len(), 2);
+        assert_eq!(restored_services[0].alias.as_ref().unwrap(), "web");
+        assert_eq!(restored_services[1].id.unwrap(), 7);
     }
 }

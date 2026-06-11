@@ -731,3 +731,108 @@ async fn kafka_policy_delivered() {
 
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
+
+/// Kafka mirror of the MQTT end-to-end: an event with payload-native
+/// labels/severity/routingKey/services combined with operator static --label,
+/// --map_key_label and --service config. Asserts the merged result on the wire body
+/// the SDK actually sends to ilert (parse_event_json + enrich_event + from_db + serialize).
+#[tokio::test]
+async fn kafka_event_with_labels_severity_routing_services() {
+    let (_container, port) = start_kafka().await;
+    let broker = format!("127.0.0.1:{}", port);
+    let mock_server = MockServer::start().await;
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let response_attempts = attempts.clone();
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let capture_bodies = bodies.clone();
+
+    Mock::given(method("POST"))
+        .and(path_regex("/v1/events/kafka/.*"))
+        .respond_with(move |req: &Request| {
+            let body = String::from_utf8_lossy(&req.body).to_string();
+            capture_bodies.lock().unwrap().push(body);
+            response_attempts.fetch_add(1, Ordering::SeqCst);
+            ResponseTemplate::new(202)
+        })
+        .mount(&mock_server)
+        .await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.kafka_brokers = Some(broker.clone());
+    config.kafka_group_id = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert-events".to_string());
+    config.db_file = db_path.clone();
+    config.event_key = Some("static-api-key".to_string());
+    config.static_labels = vec!["env=prod".to_string(), "team=core".to_string()];
+    config.map_key_labels = vec!["region=data.region".to_string()];
+    config.severity = Some(5); // fallback only — payload provides its own
+    config.static_services = vec!["alias=db".to_string()];
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client,
+        running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
+        edge_connector_probe: None,
+    });
+    let ctx_clone = daemon_ctx.clone();
+
+    let _consumer = tokio::spawn(async move {
+        run_kafka_job(ctx_clone).await;
+    });
+
+    produce_until_attempts(
+        &broker,
+        "ilert-events",
+        "machine-1",
+        r#"{
+            "eventType": "ALERT",
+            "summary": "Pump failure",
+            "severity": 2,
+            "routingKey": "team-alpha",
+            "labels": {"env": "stale", "host": "srv1"},
+            "services": [{"alias": "web"}],
+            "data": {"region": "eu-central-1"}
+        }"#,
+        &attempts,
+        1,
+        Duration::from_secs(30),
+    )
+    .await;
+
+    let captured = bodies.lock().unwrap();
+    let last = captured.last().expect("should have at least one body");
+    let body: serde_json::Value = serde_json::from_str(last).unwrap();
+
+    // labels: payload host kept, region mapped, env overridden by static, team added
+    assert_eq!(body["labels"]["host"], "srv1");
+    assert_eq!(body["labels"]["region"], "eu-central-1");
+    assert_eq!(body["labels"]["env"], "prod");
+    assert_eq!(body["labels"]["team"], "core");
+    // severity: payload wins over fallback
+    assert_eq!(body["severity"], 2);
+    // routingKey: payload-native
+    assert_eq!(body["routingKey"], "team-alpha");
+    // services: payload web + static db
+    let aliases: Vec<&str> = body["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s.get("alias").and_then(|a| a.as_str()))
+        .collect();
+    assert!(aliases.contains(&"web"));
+    assert!(aliases.contains(&"db"));
+
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+}

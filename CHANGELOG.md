@@ -1,5 +1,16 @@
 # ilagent CHANGELOG
 
+## 2026-06-11, Version 0.11.0
+
+* added support for four additional ilert event fields — `labels`, `severity`, `routingKey`, and `services` — wired end-to-end through the MQTT/Kafka consumers and the HTTP `POST /api/events` endpoint
+* added `--label key=value` (repeatable) to stamp static labels on every event, and `--map_key_label name=jsonpath` (repeatable) to pull labels from arbitrary payload paths; static labels override mapped/payload labels on key conflict
+* added `--severity N` to set a default severity (1–5, applied only when the event carries none) and `--map_key_severity jsonpath` to extract severity from the payload (string or number); out-of-range values are dropped without failing the event
+* added `--map_key_routing_key jsonpath` to extract a routing key from the payload
+* added `--service alias=NAME` / `--service id=NUM` (repeatable) to attach static service references to every event
+* static enrichment (`--label`, `--severity`, `--service`) now applies to HTTP-only daemons as well as MQTT/Kafka consumers
+* `POST /api/events` now validates `severity` is within 1–5, rejecting out-of-range values with HTTP 400
+* these consumer arguments are rejected when combined with edge connector mode (`--edge_mode`)
+
 ## 2026-05-06, Version 0.10.2
 
 * added optional authentication header for edge connector HTTP delivery (`--edge_http_auth_header`, `--edge_http_auth_value`) — the value can be set via `ILERT_EDGE_HTTP_AUTH_VALUE` env var to avoid exposing secrets in process listings

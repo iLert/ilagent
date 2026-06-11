@@ -35,6 +35,17 @@ pub struct ILConfig {
     pub map_val_etype_accept: Option<String>,
     pub map_val_etype_resolve: Option<String>,
 
+    // labels (Phase 1)
+    pub static_labels: Vec<String>,
+    pub map_key_labels: Vec<String>,
+    // severity (Phase 2)
+    pub severity: Option<i32>,
+    pub map_key_severity: Option<String>,
+    // routingKey (Phase 3)
+    pub map_key_routing_key: Option<String>,
+    // services (Phase 4)
+    pub static_services: Vec<String>,
+
     pub filter_key: Option<String>,
     pub filter_val: Option<String>,
     pub forward_message_payload: bool,
@@ -94,6 +105,12 @@ impl ILConfig {
             map_val_etype_alert: None,
             map_val_etype_accept: None,
             map_val_etype_resolve: None,
+            static_labels: Vec::new(),
+            map_key_labels: Vec::new(),
+            severity: None,
+            map_key_severity: None,
+            map_key_routing_key: None,
+            static_services: Vec::new(),
             filter_key: None,
             filter_val: None,
             forward_message_payload: false,

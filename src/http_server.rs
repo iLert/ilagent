@@ -117,11 +117,16 @@ async fn get_heartbeat(
 async fn post_event(
     _req: HttpRequest,
     container: web::Data<Mutex<WebContextContainer>>,
+    daemon_ctx: Option<web::Data<Arc<DaemonContext>>>,
     event: web::Json<EventQueueItemJson>,
 ) -> impl Responder {
     let container = container.lock().await;
 
-    let event = event.into_inner();
+    let mut event = event.into_inner();
+    // apply operator static enrichment (labels/severity/services) — mirrors the consumer path
+    if let Some(ref ctx) = daemon_ctx {
+        crate::consumers::enrich_event(&ctx.config, &mut event);
+    }
     let event = EventQueueItemJson::to_db(event, None);
 
     if ILertEventType::from_str(event.event_type.as_str()).is_err() {
@@ -134,6 +139,14 @@ async fn post_event(
     {
         return HttpResponse::BadRequest()
             .json(json!({ "error": "Unsupported value for field 'priority'." }));
+    }
+
+    // HTTP bypasses parse_event_json, so severity range (1-5) is enforced here directly
+    if let Some(severity) = event.severity {
+        if !(1..=5).contains(&severity) {
+            return HttpResponse::BadRequest()
+                .json(json!({ "error": "Unsupported value for field 'severity', must be between 1 and 5." }));
+        }
     }
 
     let insert_result = container.db.create_il_event(&event);
