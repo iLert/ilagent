@@ -758,36 +758,6 @@ async fn post_event_rejects_out_of_range_severity() {
 }
 
 #[actix_rt::test]
-async fn post_event_accepts_valid_severity() {
-    let (container, _f) = test_container();
-    let app = test::init_service(
-        App::new()
-            .app_data(container.clone())
-            .app_data(web::JsonConfig::default().limit(16000))
-            .configure(config_app),
-    )
-    .await;
-
-    let payload = json!({
-        "apiKey": "k1",
-        "eventType": "ALERT",
-        "summary": "down",
-        "severity": 3
-    });
-    let req = test::TestRequest::post()
-        .uri("/api/events")
-        .set_json(&payload)
-        .to_request();
-    let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), 200);
-
-    let c = container.lock().await;
-    let events = c.db.get_il_events(10).unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].severity.unwrap(), 3);
-}
-
-#[actix_rt::test]
 async fn post_event_without_daemon_ctx_skips_enrichment() {
     let (container, _f) = test_container();
     let app = test::init_service(

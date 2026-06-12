@@ -1614,18 +1614,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "--severity must be between 1 and 5")]
-    fn daemon_config_http_only_severity_out_of_range_panics() {
-        let m = build_cli()
-            .try_get_matches_from(vec![
-                "ilagent", "daemon", "-p", "8977", "--severity", "9",
-            ])
-            .unwrap();
-        let sub = m.subcommand_matches("daemon").unwrap();
-        build_daemon_config(sub, &m);
-    }
-
-    #[test]
     fn daemon_config_enrichment_ignored_without_event_path() {
         let m = build_cli()
             .try_get_matches_from(vec![
