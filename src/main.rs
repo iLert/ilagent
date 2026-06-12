@@ -837,7 +837,6 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
         );
     }
 
-    // routingKey
     if let Some(map_key_routing_key) = matches.get_one::<String>("map_key_routing_key") {
         config.map_key_routing_key = Some(map_key_routing_key.to_string());
         info!(
@@ -1590,8 +1589,6 @@ mod tests {
 
     #[test]
     fn daemon_config_http_only_parses_enrichment() {
-        // HTTP-only daemon (no mqtt/kafka) must still parse static enrichment so the
-        // HTTP /api/events path gets enriched via DaemonContext.config
         let m = build_cli()
             .try_get_matches_from(vec![
                 "ilagent",
@@ -1619,7 +1616,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "--severity must be between 1 and 5")]
     fn daemon_config_http_only_severity_out_of_range_panics() {
-        // severity validation must fire on the HTTP-only path too
         let m = build_cli()
             .try_get_matches_from(vec![
                 "ilagent", "daemon", "-p", "8977", "--severity", "9",
@@ -1631,7 +1627,6 @@ mod tests {
 
     #[test]
     fn daemon_config_enrichment_ignored_without_event_path() {
-        // no port, no mqtt, no kafka → nothing to enrich, args stay at defaults
         let m = build_cli()
             .try_get_matches_from(vec![
                 "ilagent", "daemon", "--label", "env=prod", "--severity", "4",
@@ -2133,7 +2128,7 @@ mod tests {
             assert!(result.is_err());
         }
 
-        // rejects repeatable --label (ArgAction::Append needs get_many detection)
+        // rejects repeatable --label
         {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
@@ -2165,7 +2160,7 @@ mod tests {
             assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
         }
 
-        // rejects --map_key_severity (scalar string arg)
+        // rejects --map_key_severity
         {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()

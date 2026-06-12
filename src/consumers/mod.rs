@@ -62,7 +62,6 @@ fn parse_service_ref(token: &str) -> Option<EventServiceRef> {
 /// This runs for every ingestion path — consumers and the HTTP endpoint — so that
 /// the HTTP bypass of `parse_event_json` still receives the same static config.
 pub fn enrich_event(config: &ILConfig, event: &mut EventQueueItemJson) {
-    // static labels — operator config overrides any payload/mapped label on conflict
     if !config.static_labels.is_empty() {
         let mut labels = event.labels.take().unwrap_or_default();
         for token in &config.static_labels {
@@ -81,14 +80,12 @@ pub fn enrich_event(config: &ILConfig, event: &mut EventQueueItemJson) {
         }
     }
 
-    // severity — apply the static fallback only when the event carries none
     if event.severity.is_none() {
         if let Some(severity) = config.severity {
             event.severity = Some(severity);
         }
     }
 
-    // static services — appended to any payload-native services
     if !config.static_services.is_empty() {
         let mut services = event.services.take().unwrap_or_default();
         for token in &config.static_services {
@@ -244,9 +241,7 @@ mod tests {
         event.labels = Some(existing);
         enrich_event(&config, &mut event);
         let labels = event.labels.unwrap();
-        // operator config wins on conflict
         assert_eq!(labels.get("env").unwrap(), "prod");
-        // non-conflicting payload label preserved
         assert_eq!(labels.get("keep").unwrap(), "yes");
     }
 
@@ -275,12 +270,10 @@ mod tests {
         let mut config = ILConfig::new();
         config.severity = Some(4);
 
-        // applied when none
         let mut event = empty_event();
         enrich_event(&config, &mut event);
         assert_eq!(event.severity.unwrap(), 4);
 
-        // not applied when already set
         let mut event2 = empty_event();
         event2.severity = Some(2);
         enrich_event(&config, &mut event2);

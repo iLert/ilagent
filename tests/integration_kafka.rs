@@ -732,10 +732,8 @@ async fn kafka_policy_delivered() {
     daemon_ctx.running.store(false, Ordering::Relaxed);
 }
 
-/// Kafka mirror of the MQTT end-to-end: an event with payload-native
-/// labels/severity/routingKey/services combined with operator static --label,
-/// --map_key_label and --service config. Asserts the merged result on the wire body
-/// the SDK actually sends to ilert (parse_event_json + enrich_event + from_db + serialize).
+/// Kafka mirror of the MQTT end-to-end: asserts the full merge precedence on the wire
+/// body the SDK sends (parse_event_json + enrich_event + from_db + serialize).
 #[tokio::test]
 async fn kafka_event_with_labels_severity_routing_services() {
     let (_container, port) = start_kafka().await;

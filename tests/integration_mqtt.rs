@@ -1319,10 +1319,8 @@ async fn mqtt_buffered_event_invalid_payload_dropped_from_mqtt_queue() {
     );
 }
 
-/// End-to-end: MQTT event carrying labels/severity/routingKey/services in the payload,
-/// combined with operator-supplied static --label, --map_key_label and --service config.
-/// Verifies the full merge precedence and that every new field survives the buffer →
-/// parse/enrich → DB round-trip the poll loop drains.
+/// End-to-end: verifies the full merge precedence and that every new field survives the
+/// buffer → parse/enrich → DB round-trip the poll loop drains.
 #[tokio::test]
 async fn mqtt_event_with_labels_severity_routing_services() {
     let (_container, port) = start_mosquitto().await;
@@ -1339,7 +1337,6 @@ async fn mqtt_event_with_labels_severity_routing_services() {
     config.db_file = db_path.clone();
     config.mqtt_buffer = true;
     config.event_key = Some("il1api-test-key".to_string());
-    // static + mapped enrichment
     config.static_labels = vec!["env=prod".to_string(), "team=core".to_string()];
     config.map_key_labels = vec!["region=data.region".to_string()];
     config.severity = Some(5); // fallback — payload provides its own, so this should NOT win

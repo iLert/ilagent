@@ -123,7 +123,6 @@ async fn post_event(
     let container = container.lock().await;
 
     let mut event = event.into_inner();
-    // apply operator static enrichment (labels/severity/services) — mirrors the consumer path
     if let Some(ref ctx) = daemon_ctx {
         crate::consumers::enrich_event(&ctx.config, &mut event);
     }

@@ -420,9 +420,8 @@ async fn event_poll_unlimited_retries_keeps_event() {
 
 // --- send_queued_event: new fields reach the wire body ---
 
-/// A queued event carrying labels/severity/routingKey/services must serialize those
-/// fields into the POST body the SDK sends. This proves the full DB -> from_db ->
-/// event_with_details path wires the new fields through (not just stored, but sent).
+/// Proves the new fields reach the wire body the SDK sends, not just the DB
+/// (full DB -> from_db -> event_with_details path).
 #[tokio::test]
 async fn send_event_includes_labels_severity_routing_services_in_body() {
     use std::sync::Mutex as StdMutex;
@@ -463,9 +462,8 @@ async fn send_event_includes_labels_severity_routing_services_in_body() {
     assert_eq!(body["services"][1]["id"], 42);
 }
 
-/// Conversely, an event with none of the new fields serializes them as JSON null
-/// (the same contract the SDK already uses for unset priority/images/etc., which the
-/// ilert API tolerates) — never a stale or garbage value.
+/// An event with none of the new fields serializes them as JSON null (the contract the
+/// SDK already uses for unset priority/images), never a stale value.
 #[tokio::test]
 async fn send_event_unset_new_fields_serialize_null() {
     use std::sync::Mutex as StdMutex;

@@ -405,9 +405,7 @@ mod tests {
         let payload = r#"{"apiKey": "k1", "summary": "s", "labels": {"env": "prod"}, "data": {"region": "eu-central-1"}}"#;
         let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
         let labels = event.labels.unwrap();
-        // payload-native label preserved
         assert_eq!(labels.get("env").unwrap(), "prod");
-        // mapped label added
         assert_eq!(labels.get("region").unwrap(), "eu-central-1");
     }
 
@@ -426,7 +424,6 @@ mod tests {
         config.map_key_labels = vec!["count=data.count".to_string()];
         let payload = r#"{"apiKey": "k1", "summary": "s", "data": {"count": 5}}"#;
         let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
-        // non-string mapped value is skipped, no labels produced
         assert!(event.labels.is_none());
     }
 
@@ -477,7 +474,6 @@ mod tests {
 
     #[test]
     fn parse_event_map_key_severity_valid_overrides_native() {
-        // mapped source is authoritative: a valid mapped value replaces payload-native
         let mut config = default_config();
         config.map_key_severity = Some("data.sev".to_string());
         let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": 4}}"#;
@@ -487,7 +483,6 @@ mod tests {
 
     #[test]
     fn parse_event_map_key_severity_out_of_range_clears_native() {
-        // mapped source resolves a value but it is out of range — payload-native must NOT win
         let mut config = default_config();
         config.map_key_severity = Some("data.sev".to_string());
         let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": 9}}"#;
@@ -500,7 +495,6 @@ mod tests {
 
     #[test]
     fn parse_event_map_key_severity_non_integer_clears_native() {
-        // mapped source resolves a non-integer value — payload-native must NOT win
         let mut config = default_config();
         config.map_key_severity = Some("data.sev".to_string());
         let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {"sev": "high"}}"#;
@@ -510,8 +504,6 @@ mod tests {
 
     #[test]
     fn parse_event_map_key_severity_absent_path_keeps_native() {
-        // mapped path resolves nothing (key absent) — there is nothing to override with,
-        // so the payload-native value survives (consistent with the other map_key_* fields)
         let mut config = default_config();
         config.map_key_severity = Some("data.sev".to_string());
         let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 2, "data": {}}"#;
@@ -583,7 +575,6 @@ mod tests {
         };
 
         let db_item = EventQueueItemJson::to_db(original.clone(), None);
-        // severity persists as integer
         assert_eq!(db_item.severity.unwrap(), 3);
         assert_eq!(db_item.routing_key.as_ref().unwrap(), "team-x");
         assert!(db_item.labels.is_some());

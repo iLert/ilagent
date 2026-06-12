@@ -321,8 +321,7 @@ impl EventQueueItemJson {
             }
         }
 
-        // labels: pull named values from payload paths, merging onto payload-native labels
-        // (map_key_label wins over payload-native on key conflict)
+        // map_key_label values override payload-native labels on key conflict
         if !config.map_key_labels.is_empty() {
             let mut labels = parsed.labels.take().unwrap_or_default();
             for token in &config.map_key_labels {
@@ -359,10 +358,8 @@ impl EventQueueItemJson {
             }
         }
 
-        // severity: pull from payload path (string or number). When configured, the mapped
-        // source is authoritative and overrides payload-native severity — so a value that is
-        // present at the path but invalid (out of range / non-integer) clears severity rather
-        // than letting the payload-native value win.
+        // a configured mapped source is authoritative: an invalid value at the path clears
+        // severity rather than falling back to the payload-native value
         if let Some(ref map_key_severity) = config.map_key_severity {
             if let Some(val) = get_nested_value(&json, map_key_severity) {
                 let extracted = match val {
@@ -398,7 +395,6 @@ impl EventQueueItemJson {
             }
         }
 
-        // routingKey: pull from payload path, overrides payload-native
         if let Some(ref map_key_routing_key) = config.map_key_routing_key {
             if let Some(val) = get_nested_value(&json, map_key_routing_key) {
                 match val.as_str() {

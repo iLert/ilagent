@@ -655,9 +655,7 @@ async fn ready_returns_204_edge_connector_healthy() {
 
 // --- POST /api/events: operator enrichment via daemon config ---
 
-/// When a DaemonContext is registered, post_event must run enrich_event so the HTTP
-/// path receives the same static labels/severity/services as the consumer path —
-/// even though it bypasses parse_event_json. Payload-native fields still win where set.
+/// With a DaemonContext registered, post_event enriches via enrich_event; payload-native fields still win.
 #[actix_rt::test]
 async fn post_event_applies_static_enrichment() {
     let file = NamedTempFile::new().unwrap();
@@ -729,8 +727,7 @@ async fn post_event_applies_static_enrichment() {
     assert!(event.services.as_ref().unwrap().contains("web"));
 }
 
-/// The HTTP path bypasses parse_event_json, so it must reject out-of-range severity
-/// itself (consumers drop it; --severity is CLI-validated; a raw HTTP payload is not).
+/// The HTTP path bypasses parse_event_json, so it rejects out-of-range severity itself.
 #[actix_rt::test]
 async fn post_event_rejects_out_of_range_severity() {
     let (container, _f) = test_container();
@@ -760,7 +757,6 @@ async fn post_event_rejects_out_of_range_severity() {
     assert_eq!(c.db.get_il_events(10).unwrap().len(), 0);
 }
 
-/// A valid in-range severity is accepted and persisted on the queued event.
 #[actix_rt::test]
 async fn post_event_accepts_valid_severity() {
     let (container, _f) = test_container();
@@ -791,7 +787,6 @@ async fn post_event_accepts_valid_severity() {
     assert_eq!(events[0].severity.unwrap(), 3);
 }
 
-/// Without a DaemonContext registered, post_event must still work (enrichment is skipped).
 #[actix_rt::test]
 async fn post_event_without_daemon_ctx_skips_enrichment() {
     let (container, _f) = test_container();
