@@ -1,6 +1,6 @@
 [package]
 name = "ilagent"
-version = "0.10.2"
+version = "0.11.0"
 authors = ["Chris Froehlingsdorf <chris@ilert.com>"]
 edition = "2024"
 

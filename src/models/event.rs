@@ -1,9 +1,10 @@
 use crate::config::ILConfig;
 use crate::json_util::get_nested_value;
 use crate::models::event_db::EventQueueItem;
-use ilert::ilert_builders::{EventImage, EventLink, ILertEventType};
+use ilert::ilert_builders::{EventImage, EventLink, EventServiceRef, ILertEventType};
 use log::{debug, error, warn};
 use serde_derive::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[allow(non_snake_case)]
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -18,6 +19,10 @@ pub struct EventQueueItemJson {
     pub images: Option<Vec<EventImage>>,
     pub links: Option<Vec<EventLink>>,
     pub customDetails: Option<serde_json::Value>,
+    pub labels: Option<HashMap<String, String>>,
+    pub severity: Option<i32>,
+    pub routingKey: Option<String>,
+    pub services: Option<Vec<EventServiceRef>>,
 }
 
 /**
@@ -36,6 +41,10 @@ pub struct EventQueueTransitionItemJson {
     pub images: Option<Vec<EventImage>>,
     pub links: Option<Vec<EventLink>>,
     pub customDetails: Option<serde_json::Value>,
+    pub labels: Option<HashMap<String, String>>,
+    pub severity: Option<i32>,
+    pub routingKey: Option<String>,
+    pub services: Option<Vec<EventServiceRef>>,
 }
 
 impl EventQueueItemJson {
@@ -50,6 +59,10 @@ impl EventQueueItemJson {
             images: trans.images,
             links: trans.links,
             customDetails: trans.customDetails,
+            labels: trans.labels,
+            severity: trans.severity,
+            routingKey: trans.routingKey,
+            services: trans.services,
         }
     }
 
@@ -81,6 +94,22 @@ impl EventQueueItemJson {
             None => None,
         };
 
+        let labels = match item.labels {
+            Some(v) => match serde_json::to_string(&v) {
+                Ok(str) => Some(str),
+                _ => None,
+            },
+            None => None,
+        };
+
+        let services = match item.services {
+            Some(v) => match serde_json::to_string(&v) {
+                Ok(str) => Some(str),
+                _ => None,
+            },
+            None => None,
+        };
+
         EventQueueItem {
             id: None,
             integration_key: item.integrationKey,
@@ -94,6 +123,10 @@ impl EventQueueItemJson {
             links,
             custom_details,
             event_api_path,
+            labels,
+            severity: item.severity.map(|s| s as i64),
+            routing_key: item.routingKey,
+            services,
         }
     }
 
@@ -131,6 +164,22 @@ impl EventQueueItemJson {
             None => None,
         };
 
+        let labels: Option<HashMap<String, String>> = match item.labels {
+            Some(str) => match serde_json::from_str(str.as_str()) {
+                Ok(v) => Some(v),
+                _ => None,
+            },
+            None => None,
+        };
+
+        let services: Option<Vec<EventServiceRef>> = match item.services {
+            Some(str) => match serde_json::from_str(str.as_str()) {
+                Ok(v) => Some(v),
+                _ => None,
+            },
+            None => None,
+        };
+
         EventQueueItemJson {
             integrationKey: item.integration_key,
             eventType: item.event_type,
@@ -141,6 +190,10 @@ impl EventQueueItemJson {
             images,
             links,
             customDetails: custom_details,
+            labels,
+            severity: item.severity.map(|s| s as i32),
+            routingKey: item.routing_key,
+            services,
         }
     }
 
@@ -265,6 +318,92 @@ impl EventQueueItemJson {
         if let Some(ref map_val_etype_resolve) = config.map_val_etype_resolve {
             if map_val_etype_resolve.eq(event_type.as_str()) {
                 parsed.eventType = Some(ILertEventType::RESOLVE.as_str().to_string());
+            }
+        }
+
+        // map_key_label values override payload-native labels on key conflict
+        if !config.map_key_labels.is_empty() {
+            let mut labels = parsed.labels.take().unwrap_or_default();
+            for token in &config.map_key_labels {
+                let Some((name, path)) = token.split_once('=') else {
+                    warn!(
+                        "Ignoring malformed map_key_label '{}', expected name=jsonpath",
+                        token
+                    );
+                    continue;
+                };
+                let name = name.trim();
+                let path = path.trim();
+                if name.is_empty() || path.is_empty() {
+                    warn!(
+                        "Ignoring malformed map_key_label '{}', expected name=jsonpath",
+                        token
+                    );
+                    continue;
+                }
+                if let Some(val) = get_nested_value(&json, path) {
+                    match val.as_str() {
+                        Some(s) => {
+                            labels.insert(name.to_string(), s.to_string());
+                        }
+                        None => warn!(
+                            "map_key_label '{}' matched a non-string value: {:?}",
+                            path, val
+                        ),
+                    }
+                }
+            }
+            if !labels.is_empty() {
+                parsed.labels = Some(labels);
+            }
+        }
+
+        // a configured mapped source is authoritative: an invalid value at the path clears
+        // severity rather than falling back to the payload-native value
+        if let Some(ref map_key_severity) = config.map_key_severity {
+            if let Some(val) = get_nested_value(&json, map_key_severity) {
+                let extracted = match val {
+                    serde_json::Value::Number(n) => n.as_i64(),
+                    serde_json::Value::String(s) => s.parse::<i64>().ok(),
+                    _ => None,
+                };
+                match extracted {
+                    Some(n) if (1..=5).contains(&n) => parsed.severity = Some(n as i32),
+                    Some(n) => {
+                        warn!(
+                            "map_key_severity '{}' value {} is out of range 1..=5, dropping severity",
+                            map_key_severity, n
+                        );
+                        parsed.severity = None;
+                    }
+                    None => {
+                        warn!(
+                            "map_key_severity '{}' matched a non-integer value: {:?}, dropping severity",
+                            map_key_severity, val
+                        );
+                        parsed.severity = None;
+                    }
+                }
+            }
+        }
+
+        // validate any severity (payload-native or mapped) — drop out-of-range, never fail the event
+        if let Some(sev) = parsed.severity {
+            if !(1..=5).contains(&sev) {
+                warn!("Dropping severity {}, value is out of range 1..=5", sev);
+                parsed.severity = None;
+            }
+        }
+
+        if let Some(ref map_key_routing_key) = config.map_key_routing_key {
+            if let Some(val) = get_nested_value(&json, map_key_routing_key) {
+                match val.as_str() {
+                    Some(s) => parsed.routingKey = Some(s.to_string()),
+                    None => warn!(
+                        "map_key_routing_key '{}' matched a non-string value: {:?}",
+                        map_key_routing_key, val
+                    ),
+                }
             }
         }
 

@@ -15,6 +15,10 @@ pub struct EventQueueItem {
     pub links: Option<String>,
     pub custom_details: Option<String>,
     pub event_api_path: Option<String>,
+    pub labels: Option<String>,
+    pub severity: Option<i64>,
+    pub routing_key: Option<String>,
+    pub services: Option<String>,
 }
 
 impl EventQueueItem {
@@ -32,6 +36,10 @@ impl EventQueueItem {
             links: None,
             custom_details: None,
             event_api_path: None,
+            labels: None,
+            severity: None,
+            routing_key: None,
+            services: None,
         }
     }
 
@@ -54,6 +62,10 @@ impl EventQueueItem {
             links: None,
             custom_details: None,
             event_api_path: None,
+            labels: None,
+            severity: None,
+            routing_key: None,
+            services: None,
         }
     }
 }

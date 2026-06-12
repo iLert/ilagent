@@ -1,3 +1,0 @@
-#!/bin/bash
-ILERT_API_KEY='eyJhbGciOiJIUzIjx...' ilagent cleanup -v -v \
-  --resource alerts

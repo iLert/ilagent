@@ -29,6 +29,8 @@
 #   eventType:     ALERT (mapped from 'alertCreated')
 #   summary:       Anomaly detected on pump unit 2 (from 'data.message')
 #   alertKey:      f9e8d7c6-b5a4-3210-fedc-ba9876543210 (from 'data.alertId')
+#   labels:        slot=nrd023 (from root 'slot'),
+#                  label=Pressure Threshold Exceeded (from 'data.label')
 #   customDetails: the full original payload with topic merged in
 
 ilagent daemon -v -v \
@@ -38,4 +40,6 @@ ilagent daemon -v -v \
     --map_val_etype_alert 'alertCreated' \
     --map_key_summary 'data.message' \
     --map_key_alert_key 'data.alertId' \
+    --map_key_label 'slot=slot' \
+    --map_key_label 'label=data.label' \
     --forward_message_payload

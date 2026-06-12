@@ -652,3 +652,138 @@ async fn ready_returns_204_edge_connector_healthy() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 204);
 }
+
+// --- POST /api/events: operator enrichment via daemon config ---
+
+/// With a DaemonContext registered, post_event enriches via enrich_event; payload-native fields still win.
+#[actix_rt::test]
+async fn post_event_applies_static_enrichment() {
+    let file = NamedTempFile::new().unwrap();
+    let db_path = file.path().to_str().unwrap();
+    let db = ILDatabase::new(db_path);
+    db.prepare_database();
+    let container = web::Data::new(Mutex::new(WebContextContainer {
+        db: ILDatabase::new(db_path),
+        ilert_client: ILert::new().unwrap(),
+    }));
+
+    let mut config = ILConfig::new();
+    config.db_file = db_path.to_string();
+    config.static_labels = vec!["env=prod".to_string()];
+    config.severity = Some(4); // fallback only
+    config.static_services = vec!["alias=web".to_string()];
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(ILDatabase::new(db_path)),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
+        edge_connector_probe: None,
+    });
+    let daemon_data = web::Data::new(daemon_ctx);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .app_data(web::JsonConfig::default().limit(16000))
+            .configure(config_app),
+    )
+    .await;
+
+    // payload carries its own labels + severity, no services
+    let payload = json!({
+        "apiKey": "k1",
+        "eventType": "ALERT",
+        "summary": "down",
+        "labels": {"host": "srv1"},
+        "severity": 2
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/api/events")
+        .set_json(&payload)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let c = container.lock().await;
+    let events = c.db.get_il_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+
+    // static label merged with payload label
+    let labels: std::collections::HashMap<String, String> =
+        serde_json::from_str(event.labels.as_ref().unwrap()).unwrap();
+    assert_eq!(labels.get("host").unwrap(), "srv1");
+    assert_eq!(labels.get("env").unwrap(), "prod");
+
+    // payload severity wins over the static fallback
+    assert_eq!(event.severity.unwrap(), 2);
+
+    // static service applied (payload had none)
+    assert!(event.services.as_ref().unwrap().contains("web"));
+}
+
+/// The HTTP path bypasses parse_event_json, so it rejects out-of-range severity itself.
+#[actix_rt::test]
+async fn post_event_rejects_out_of_range_severity() {
+    let (container, _f) = test_container();
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(web::JsonConfig::default().limit(16000))
+            .configure(config_app),
+    )
+    .await;
+
+    let payload = json!({
+        "apiKey": "k1",
+        "eventType": "ALERT",
+        "summary": "down",
+        "severity": 999
+    });
+    let req = test::TestRequest::post()
+        .uri("/api/events")
+        .set_json(&payload)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 400);
+
+    // rejected before it could be queued
+    let c = container.lock().await;
+    assert_eq!(c.db.get_il_events(10).unwrap().len(), 0);
+}
+
+#[actix_rt::test]
+async fn post_event_without_daemon_ctx_skips_enrichment() {
+    let (container, _f) = test_container();
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(web::JsonConfig::default().limit(16000))
+            .configure(config_app),
+    )
+    .await;
+
+    let payload = json!({
+        "apiKey": "k1",
+        "eventType": "ALERT",
+        "summary": "down"
+    });
+
+    let req = test::TestRequest::post()
+        .uri("/api/events")
+        .set_json(&payload)
+        .to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 200);
+
+    let c = container.lock().await;
+    let events = c.db.get_il_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].labels.is_none());
+    assert!(events[0].severity.is_none());
+}

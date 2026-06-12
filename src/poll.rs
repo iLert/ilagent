@@ -172,10 +172,10 @@ pub async fn send_queued_event(ilert_client: &ILert, event: &EventQueueItem) -> 
             parsed_event.images,
             parsed_event.links,
             parsed_event.customDetails,
-            None,
-            None,
-            None,
-            None,
+            parsed_event.routingKey,
+            parsed_event.severity,
+            parsed_event.labels,
+            parsed_event.services,
         )
         .execute()
         .await;

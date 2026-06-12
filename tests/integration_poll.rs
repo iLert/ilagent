@@ -417,3 +417,81 @@ async fn event_poll_unlimited_retries_keeps_event() {
         "event should remain in queue with unlimited retries"
     );
 }
+
+// --- send_queued_event: new fields reach the wire body ---
+
+/// Proves the new fields reach the wire body the SDK sends, not just the DB
+/// (full DB -> from_db -> event_with_details path).
+#[tokio::test]
+async fn send_event_includes_labels_severity_routing_services_in_body() {
+    use std::sync::Mutex as StdMutex;
+    let mock_server = MockServer::start().await;
+
+    let captured: Arc<StdMutex<Option<serde_json::Value>>> = Arc::new(StdMutex::new(None));
+    let captured_clone = captured.clone();
+
+    Mock::given(method("POST"))
+        .and(path_regex(".*"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
+            *captured_clone.lock().unwrap() = Some(body);
+            ResponseTemplate::new(202)
+        })
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
+
+    let mut event = alert_event();
+    event.labels = Some(r#"{"env":"prod","dc":"eu"}"#.to_string());
+    event.severity = Some(3);
+    event.routing_key = Some("team-alpha".to_string());
+    event.services = Some(r#"[{"alias":"web"},{"id":42}]"#.to_string());
+
+    let should_retry = send_queued_event(&ilert_client, &event).await;
+    assert!(!should_retry, "202 should not retry");
+
+    let body = captured.lock().unwrap().clone().expect("request body captured");
+    assert_eq!(body["labels"]["env"], "prod");
+    assert_eq!(body["labels"]["dc"], "eu");
+    assert_eq!(body["severity"], 3);
+    assert_eq!(body["routingKey"], "team-alpha");
+    assert_eq!(body["services"][0]["alias"], "web");
+    assert_eq!(body["services"][1]["id"], 42);
+}
+
+/// An event with none of the new fields serializes them as JSON null (the contract the
+/// SDK already uses for unset priority/images), never a stale value.
+#[tokio::test]
+async fn send_event_unset_new_fields_serialize_null() {
+    use std::sync::Mutex as StdMutex;
+    let mock_server = MockServer::start().await;
+
+    let captured: Arc<StdMutex<Option<serde_json::Value>>> = Arc::new(StdMutex::new(None));
+    let captured_clone = captured.clone();
+
+    Mock::given(method("POST"))
+        .and(path_regex(".*"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or_default();
+            *captured_clone.lock().unwrap() = Some(body);
+            ResponseTemplate::new(202)
+        })
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let ilert_client =
+        ILert::new_with_opts(Some(mock_server.uri().as_str()), None, Some(5), None).unwrap();
+
+    let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
+    assert!(!should_retry);
+
+    let body = captured.lock().unwrap().clone().expect("request body captured");
+    assert!(body["labels"].is_null(), "labels should be null when unset");
+    assert!(body["severity"].is_null(), "severity should be null when unset");
+    assert!(body["routingKey"].is_null(), "routingKey should be null when unset");
+    assert!(body["services"].is_null(), "services should be null when unset");
+}

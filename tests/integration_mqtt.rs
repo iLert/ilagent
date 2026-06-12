@@ -1318,3 +1318,101 @@ async fn mqtt_buffered_event_invalid_payload_dropped_from_mqtt_queue() {
         "invalid payload should not create an event"
     );
 }
+
+/// End-to-end: verifies the full merge precedence and that every new field survives the
+/// buffer → parse/enrich → DB round-trip the poll loop drains.
+#[tokio::test]
+async fn mqtt_event_with_labels_severity_routing_services() {
+    let (_container, port) = start_mosquitto().await;
+
+    let tmp = NamedTempFile::new().unwrap();
+    let db_path = tmp.path().to_str().unwrap().to_string();
+
+    let mut config = ILConfig::new();
+    config.mqtt_host = Some("127.0.0.1".to_string());
+    config.mqtt_port = Some(port);
+    config.mqtt_name = Some(format!("ilagent-test-{}", uuid::Uuid::new_v4()));
+    config.event_topic = Some("ilert/events".to_string());
+    config.heartbeat_topic = Some("ilert/heartbeats".to_string());
+    config.db_file = db_path.clone();
+    config.mqtt_buffer = true;
+    config.event_key = Some("il1api-test-key".to_string());
+    config.static_labels = vec!["env=prod".to_string(), "team=core".to_string()];
+    config.map_key_labels = vec!["region=data.region".to_string()];
+    config.severity = Some(5); // fallback — payload provides its own, so this should NOT win
+    config.static_services = vec!["alias=db".to_string()];
+
+    let db = ILDatabase::new(&db_path);
+    db.prepare_database();
+
+    let daemon_ctx = Arc::new(DaemonContext {
+        config,
+        db: Mutex::new(db),
+        ilert_client: ILert::new().unwrap(),
+        running: AtomicBool::new(true),
+        mqtt_probe: None,
+        kafka_probe: None,
+        edge_connector_probe: None,
+    });
+    let ctx_clone = daemon_ctx.clone();
+
+    let _consumer = tokio::task::spawn_blocking(move || {
+        run_mqtt_job(ctx_clone);
+    });
+
+    let poll_ctx = daemon_ctx.clone();
+    let _poller = tokio::spawn(async move {
+        run_mqtt_poll_job(poll_ctx).await;
+    });
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    mqtt_publish(
+        "127.0.0.1",
+        port,
+        "ilert/events",
+        r#"{
+            "eventType": "ALERT",
+            "summary": "Pump failure",
+            "severity": 2,
+            "routingKey": "team-alpha",
+            "labels": {"env": "stale", "host": "srv1"},
+            "services": [{"alias": "web"}],
+            "data": {"region": "eu-central-1"}
+        }"#,
+    );
+
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    daemon_ctx.running.store(false, Ordering::Relaxed);
+
+    let db = ILDatabase::new(&db_path);
+    let events = db.get_il_events(10).unwrap();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+
+    // labels: payload (host) preserved, region added via map_key_label,
+    // env overridden by static --label (operator wins), team added by static --label
+    let labels: std::collections::HashMap<String, String> =
+        serde_json::from_str(event.labels.as_ref().unwrap()).unwrap();
+    assert_eq!(labels.get("host").unwrap(), "srv1");
+    assert_eq!(labels.get("region").unwrap(), "eu-central-1");
+    assert_eq!(labels.get("env").unwrap(), "prod");
+    assert_eq!(labels.get("team").unwrap(), "core");
+
+    // severity: payload value wins over the static fallback
+    assert_eq!(event.severity.unwrap(), 2);
+
+    // routingKey: payload-native carried through
+    assert_eq!(event.routing_key.as_ref().unwrap(), "team-alpha");
+
+    // services: payload alias=web plus static alias=db appended
+    let services: serde_json::Value = serde_json::from_str(event.services.as_ref().unwrap()).unwrap();
+    let aliases: Vec<&str> = services
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s.get("alias").and_then(|a| a.as_str()))
+        .collect();
+    assert!(aliases.contains(&"web"));
+    assert!(aliases.contains(&"db"));
+}

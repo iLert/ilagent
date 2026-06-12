@@ -71,6 +71,33 @@ pub fn consumer_args() -> Vec<Arg> {
             .long("map_val_etype_resolve")
             .value_name("MAP_VAL_ETYPE_RESOLVE")
             .help("Maps the given value to eventType 'RESOLVE'"),
+        Arg::new("label")
+            .long("label")
+            .value_name("KEY=VALUE")
+            .action(ArgAction::Append)
+            .help("Static label stamped on every event (repeatable, e.g. --label env=prod). Overrides payload labels on key conflict"),
+        Arg::new("map_key_label")
+            .long("map_key_label")
+            .value_name("NAME=JSONPATH")
+            .action(ArgAction::Append)
+            .help("Pull a payload value into a named label (repeatable, e.g. --map_key_label region=data.region)"),
+        Arg::new("severity")
+            .long("severity")
+            .value_name("SEVERITY")
+            .help("Default event severity 1-5, applied only when the event has none"),
+        Arg::new("map_key_severity")
+            .long("map_key_severity")
+            .value_name("MAP_KEY_SEVERITY")
+            .help("JSON path for severity field (string or number, 1-5)"),
+        Arg::new("map_key_routing_key")
+            .long("map_key_routing_key")
+            .value_name("MAP_KEY_ROUTING_KEY")
+            .help("JSON path for routingKey field"),
+        Arg::new("service")
+            .long("service")
+            .value_name("alias=NAME|id=NUM")
+            .action(ArgAction::Append)
+            .help("Static service ref on every event (repeatable, e.g. --service alias=web-frontend or --service id=123)"),
         Arg::new("filter_key")
             .long("filter_key")
             .value_name("FILTER_KEY")
@@ -112,7 +139,7 @@ pub fn consumer_args() -> Vec<Arg> {
 
 pub fn build_cli() -> Command {
     let mut daemon_cmd = Command::new("daemon")
-        .about("Run ilagent as a daemon with optional HTTP server, MQTT, and Kafka consumers")
+        .about("Run ilagent as a daemon — supports event consumers (MQTT, Kafka), an HTTP server, and edge connector mode for polling and delivering events")
         .arg(Arg::new("port")
             .short('p')
             .long("port")
@@ -379,6 +406,9 @@ const EDGE_REJECTED_STRING_ARGS: &[&str] = &[
     "map_val_etype_alert",
     "map_val_etype_accept",
     "map_val_etype_resolve",
+    "severity",
+    "map_key_severity",
+    "map_key_routing_key",
     "filter_key",
     "filter_val",
     "mqtt_shared_group",
@@ -389,6 +419,10 @@ const EDGE_REJECTED_STRING_ARGS: &[&str] = &[
 ];
 
 const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buffer"];
+
+// Repeatable (ArgAction::Append) consumer args — get_one would miss these, so they
+// need a get_many presence check in the edge-mode rejection loop.
+const EDGE_REJECTED_MULTI_ARGS: &[&str] = &["label", "map_key_label", "service"];
 
 pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
@@ -423,6 +457,14 @@ fn build_edge_daemon_config(
     }
     for arg in EDGE_REJECTED_FLAG_ARGS {
         if matches.get_flag(arg) {
+            panic!(
+                "--{} cannot be used with --edge_mode (edge connector is an exclusive daemon mode)",
+                arg
+            );
+        }
+    }
+    for arg in EDGE_REJECTED_MULTI_ARGS {
+        if matches.get_many::<String>(arg).is_some() {
             panic!(
                 "--{} cannot be used with --edge_mode (edge connector is an exclusive daemon mode)",
                 arg
@@ -564,6 +606,15 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
         config.heartbeat_key = Some(heartbeat_key.to_string());
     }
 
+    // Static enrichment (labels/severity/services) feeds enrich_event, which runs on the
+    // HTTP path too — so parse it whenever events can flow, not just for MQTT/Kafka.
+    let has_event_path = config.start_http
+        || matches.get_one::<String>("mqtt_host").is_some()
+        || matches.get_one::<String>("kafka_brokers").is_some();
+    if has_event_path {
+        config = parse_enrichment_arguments(matches, config);
+    }
+
     if let Some(mqtt_host) = matches.get_one::<String>("mqtt_host") {
         let mqtt_port_str = matches
             .get_one::<String>("mqtt_port")
@@ -652,6 +703,42 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
     config
 }
 
+/// Parse operator static enrichment args (labels / severity / services) consumed by
+/// `enrich_event`. These apply to every event-delivery path — the HTTP `/api/events`
+/// endpoint as well as the MQTT/Kafka consumers — so they are parsed separately from
+/// `parse_consumer_arguments`, whose `map_key_*` mappings only run inside the
+/// consumer-only `parse_event_json`.
+pub fn parse_enrichment_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
+    if let Some(labels) = matches.get_many::<String>("label") {
+        config.static_labels = labels.map(|s| s.to_string()).collect();
+        info!(
+            "{} static label(s) have been configured",
+            config.static_labels.len()
+        );
+    }
+
+    if let Some(severity) = matches.get_one::<String>("severity") {
+        let val = severity
+            .parse::<i32>()
+            .expect("Failed to parse severity as integer");
+        if !(1..=5).contains(&val) {
+            panic!("--severity must be between 1 and 5");
+        }
+        config.severity = Some(val);
+        info!("Default severity has been configured: {}", val);
+    }
+
+    if let Some(services) = matches.get_many::<String>("service") {
+        config.static_services = services.map(|s| s.to_string()).collect();
+        info!(
+            "{} static service ref(s) have been configured",
+            config.static_services.len()
+        );
+    }
+
+    config
+}
+
 pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
     if let Some(username) = matches.get_one::<String>("mqtt_username") {
         config.mqtt_username = Some(username.to_string());
@@ -731,6 +818,30 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
         info!(
             "Overwrite for payload val of key 'eventType' and default: 'RESOLVE' has been configured: '{:?}'",
             config.map_val_etype_resolve
+        );
+    }
+
+    if let Some(map_key_labels) = matches.get_many::<String>("map_key_label") {
+        config.map_key_labels = map_key_labels.map(|s| s.to_string()).collect();
+        info!(
+            "{} label mapping(s) have been configured",
+            config.map_key_labels.len()
+        );
+    }
+
+    if let Some(map_key_severity) = matches.get_one::<String>("map_key_severity") {
+        config.map_key_severity = Some(map_key_severity.to_string());
+        info!(
+            "Severity field path has been configured: '{}'",
+            map_key_severity
+        );
+    }
+
+    if let Some(map_key_routing_key) = matches.get_one::<String>("map_key_routing_key") {
+        config.map_key_routing_key = Some(map_key_routing_key.to_string());
+        info!(
+            "Routing key field path has been configured: '{}'",
+            map_key_routing_key
         );
     }
 
@@ -1389,6 +1500,132 @@ mod tests {
         assert_eq!(config.filter_val.unwrap(), "ALARM");
     }
 
+    // --- build_daemon_config: new event fields (labels/severity/routingKey/services) ---
+
+    #[test]
+    fn daemon_config_repeatable_labels_and_services() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--label",
+                "env=prod",
+                "--label",
+                "dc=eu-central-1",
+                "--map_key_label",
+                "region=data.region",
+                "--service",
+                "alias=web-frontend",
+                "--service",
+                "id=123",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert_eq!(
+            config.static_labels,
+            vec!["env=prod".to_string(), "dc=eu-central-1".to_string()]
+        );
+        assert_eq!(config.map_key_labels, vec!["region=data.region".to_string()]);
+        assert_eq!(
+            config.static_services,
+            vec!["alias=web-frontend".to_string(), "id=123".to_string()]
+        );
+    }
+
+    #[test]
+    fn daemon_config_severity_and_routing_key() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--severity",
+                "3",
+                "--map_key_severity",
+                "data.sev",
+                "--map_key_routing_key",
+                "data.team",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert_eq!(config.severity.unwrap(), 3);
+        assert_eq!(config.map_key_severity.unwrap(), "data.sev");
+        assert_eq!(config.map_key_routing_key.unwrap(), "data.team");
+    }
+
+    #[test]
+    #[should_panic(expected = "--severity must be between 1 and 5")]
+    fn daemon_config_severity_out_of_range_panics() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--severity",
+                "9",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m);
+    }
+
+    #[test]
+    fn daemon_config_http_only_parses_enrichment() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-p",
+                "8977",
+                "--label",
+                "env=prod",
+                "--severity",
+                "4",
+                "--service",
+                "alias=web",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert!(config.start_http);
+        assert_eq!(config.static_labels, vec!["env=prod".to_string()]);
+        assert_eq!(config.severity.unwrap(), 4);
+        assert_eq!(config.static_services, vec!["alias=web".to_string()]);
+        // consumer-only mappings are NOT parsed without an actual consumer
+        assert!(config.map_key_labels.is_empty());
+    }
+
+    #[test]
+    fn daemon_config_enrichment_ignored_without_event_path() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent", "daemon", "--label", "env=prod", "--severity", "4",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert!(config.static_labels.is_empty());
+        assert!(config.severity.is_none());
+    }
+
     // --- build_daemon_config: db file ---
 
     #[test]
@@ -1877,6 +2114,54 @@ mod tests {
                 build_daemon_config(sub, &m);
             });
             assert!(result.is_err());
+        }
+
+        // rejects repeatable --label
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--label", "env=prod",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // rejects repeatable --service
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--service", "alias=web",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+        }
+
+        // rejects --map_key_severity
+        {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
+                        "http://localhost/webhook", "--map_key_severity", "data.sev",
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
         }
 
         // rejects edge_poll_interval below 5

@@ -17,6 +17,11 @@ fn migrations_run_on_fresh_db() {
     assert_eq!(db.get_il_value("mig_1").unwrap(), "1");
     assert_eq!(db.get_il_value("mig_2").unwrap(), "1");
     assert_eq!(db.get_il_value("mig_3").unwrap(), "1");
+    // event-field migrations (labels/severity/routing_key/services)
+    assert_eq!(db.get_il_value("mig_6").unwrap(), "1");
+    assert_eq!(db.get_il_value("mig_7").unwrap(), "1");
+    assert_eq!(db.get_il_value("mig_8").unwrap(), "1");
+    assert_eq!(db.get_il_value("mig_9").unwrap(), "1");
 }
 
 #[test]
@@ -160,6 +165,45 @@ fn insert_event_with_all_optional_fields() {
     assert!(inserted.links.unwrap().contains("link.com"));
     assert!(inserted.custom_details.unwrap().contains("prod"));
     assert_eq!(inserted.event_api_path.unwrap(), "/v1/events/mqtt/k1");
+}
+
+#[test]
+fn insert_event_with_new_fields_persists_through_read() {
+    let (db, _f) = temp_db();
+
+    let mut event = EventQueueItem::new_with_required("k1", "ALERT", "full", None);
+    event.labels = Some(r#"{"env":"prod","dc":"eu"}"#.to_string());
+    event.severity = Some(3);
+    event.routing_key = Some("team-alpha".to_string());
+    event.services = Some(r#"[{"alias":"web"},{"id":42}]"#.to_string());
+
+    let inserted = db.create_il_event(&event).unwrap().unwrap();
+    let id = inserted.id.clone().unwrap();
+
+    // values survive INSERT and the positional SELECT round-trip
+    let fetched = db.get_il_event(&id).unwrap().unwrap();
+    assert!(fetched.labels.as_ref().unwrap().contains("prod"));
+    assert_eq!(fetched.severity.unwrap(), 3);
+    assert_eq!(fetched.routing_key.as_ref().unwrap(), "team-alpha");
+    assert!(fetched.services.as_ref().unwrap().contains("web"));
+
+    // and through the batch query the poll loop uses
+    let batch = db.get_il_events(10).unwrap();
+    assert_eq!(batch.len(), 1);
+    assert_eq!(batch[0].severity.unwrap(), 3);
+    assert_eq!(batch[0].routing_key.as_ref().unwrap(), "team-alpha");
+}
+
+#[test]
+fn insert_event_with_new_fields_defaults_null() {
+    let (db, _f) = temp_db();
+
+    let event = EventQueueItem::new_with_required("k1", "ALERT", "minimal", None);
+    let inserted = db.create_il_event(&event).unwrap().unwrap();
+    assert!(inserted.labels.is_none());
+    assert!(inserted.severity.is_none());
+    assert!(inserted.routing_key.is_none());
+    assert!(inserted.services.is_none());
 }
 
 // --- metadata key/value ---
