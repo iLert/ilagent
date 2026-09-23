@@ -15,8 +15,8 @@ use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::models::event_db::EventQueueItem;
 use ilagent::{
-    DaemonContext, EdgeConnectorProbeState, KafkaProbeState, MqttProbeState, consumers,
-    edge_connector, hbt, http_server, poll, version_check,
+    DaemonContext, EdgeConnectorProbeState, KafkaProbeState, MqttProbeState, PullProbeState,
+    consumers, edge_connector, hbt, http_server, poll, version_check,
 };
 
 fn strip_bearer_prefix(key: String) -> String {
@@ -260,7 +260,96 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("edge_standby_interval")
             .long("edge_standby_interval")
             .value_name("SECONDS")
-            .help("HA standby retry interval in seconds (default: 10)"));
+            .help("HA standby retry interval in seconds (default: 10)"))
+        // pull connector
+        .arg(Arg::new("pull_url")
+            .long("pull_url")
+            .value_name("URL")
+            .help("Poll this HTTP endpoint for events (enables the pull connector)"))
+        .arg(Arg::new("pull_name")
+            .long("pull_name")
+            .value_name("NAME")
+            .help("Name for this pull source, keys its stored cursor and dedup state (required)"))
+        .arg(Arg::new("pull_interval")
+            .long("pull_interval")
+            .value_name("SECONDS")
+            .help("Seconds to wait between pull cycles (default: 60, range 10-3600)"))
+        .arg(Arg::new("pull_body")
+            .long("pull_body")
+            .value_name("JSON")
+            .help("Request body for the pull source, implies POST (e.g. for JSON-RPC APIs)"))
+        .arg(Arg::new("pull_items_path")
+            .long("pull_items_path")
+            .value_name("PATH")
+            .help("JSON path to the record array in the response (default: the whole response)"))
+        .arg(Arg::new("pull_header")
+            .long("pull_header")
+            .value_name("KEY=VALUE")
+            .action(ArgAction::Append)
+            .help("Static header sent on every pull request (repeatable, e.g. --pull_header X-Tenant-ID=abc)"))
+        .arg(Arg::new("pull_auth")
+            .long("pull_auth")
+            .value_name("MODE")
+            .value_parser(["none", "header", "basic", "oauth2"])
+            .help("Authentication mode for the pull source (default: none)"))
+        .arg(Arg::new("pull_auth_header")
+            .long("pull_auth_header")
+            .value_name("HEADER")
+            .help("Header name for pull authentication (e.g. Authorization, X-API-Key)"))
+        .arg(Arg::new("pull_auth_value")
+            .long("pull_auth_value")
+            .value_name("VALUE")
+            .help("Auth header value for the pull source (falls back to ILERT_PULL_AUTH_VALUE env var)"))
+        .arg(Arg::new("pull_username")
+            .long("pull_username")
+            .value_name("USERNAME")
+            .help("Username for basic auth on the pull source"))
+        .arg(Arg::new("pull_password")
+            .long("pull_password")
+            .value_name("PASSWORD")
+            .help("Password for basic auth on the pull source (falls back to ILERT_PULL_PASSWORD env var)"))
+        .arg(Arg::new("pull_token_url")
+            .long("pull_token_url")
+            .value_name("URL")
+            .help("OAuth2 token endpoint for the pull source"))
+        .arg(Arg::new("pull_client_id")
+            .long("pull_client_id")
+            .value_name("CLIENT_ID")
+            .help("OAuth2 client id for the pull source"))
+        .arg(Arg::new("pull_client_secret")
+            .long("pull_client_secret")
+            .value_name("CLIENT_SECRET")
+            .help("OAuth2 client secret (falls back to ILERT_PULL_CLIENT_SECRET env var)"))
+        .arg(Arg::new("pull_scope")
+            .long("pull_scope")
+            .value_name("SCOPE")
+            .help("OAuth2 scope for the pull source (e.g. 'token' for Sophos Central)"))
+        .arg(Arg::new("pull_cursor_mode")
+            .long("pull_cursor_mode")
+            .value_name("MODE")
+            .value_parser(["none", "token", "timestamp"])
+            .help("How to resume between polls (default: none, snapshot with dedup)"))
+        .arg(Arg::new("pull_cursor_path")
+            .long("pull_cursor_path")
+            .value_name("PATH")
+            .help("token/url: JSON path in the response to the cursor. timestamp: path within each record"))
+        .arg(Arg::new("pull_cursor_param")
+            .long("pull_cursor_param")
+            .value_name("PARAM")
+            .help("Query parameter used to send the cursor back (token and timestamp modes)"))
+        .arg(Arg::new("pull_cursor_format")
+            .long("pull_cursor_format")
+            .value_name("FORMAT")
+            .value_parser(["epoch_s", "epoch_ms", "iso8601"])
+            .help("Timestamp cursor format (default: iso8601)"))
+        .arg(Arg::new("pull_initial_lookback")
+            .long("pull_initial_lookback")
+            .value_name("SECONDS")
+            .help("Timestamp mode: how far back to reach on the first run (default: 3600)"))
+        .arg(Arg::new("pull_dedup_key")
+            .long("pull_dedup_key")
+            .value_name("PATH")
+            .help("JSON path to a stable unique id per record, enables deduplication"));
 
     for arg in consumer_args() {
         daemon_cmd = daemon_cmd.arg(arg);
@@ -421,6 +510,26 @@ const EDGE_REJECTED_STRING_ARGS: &[&str] = &[
     "map_key_shift",
     "shift_offset",
     "max_retries",
+    "pull_url",
+    "pull_name",
+    "pull_interval",
+    "pull_body",
+    "pull_items_path",
+    "pull_auth",
+    "pull_auth_header",
+    "pull_auth_value",
+    "pull_username",
+    "pull_password",
+    "pull_token_url",
+    "pull_client_id",
+    "pull_client_secret",
+    "pull_scope",
+    "pull_cursor_mode",
+    "pull_cursor_path",
+    "pull_cursor_param",
+    "pull_cursor_format",
+    "pull_initial_lookback",
+    "pull_dedup_key",
 ];
 
 const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buffer"];
@@ -428,7 +537,7 @@ const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buff
 // Repeatable (ArgAction::Append) consumer args — get_one would miss these, so they
 // need a get_many presence check in the edge-mode rejection loop.
 const EDGE_REJECTED_MULTI_ARGS: &[&str] =
-    &["label", "map_key_label", "service", "map_val_severity"];
+    &["label", "map_key_label", "service", "map_val_severity", "pull_header"];
 
 pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
@@ -616,7 +725,8 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
     // HTTP path too — so parse it whenever events can flow, not just for MQTT/Kafka.
     let has_event_path = config.start_http
         || matches.get_one::<String>("mqtt_host").is_some()
-        || matches.get_one::<String>("kafka_brokers").is_some();
+        || matches.get_one::<String>("kafka_brokers").is_some()
+        || matches.get_one::<String>("pull_url").is_some();
     if has_event_path {
         config = parse_enrichment_arguments(matches, config);
     }
@@ -705,6 +815,96 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
             );
         }
     }
+
+    if matches.get_one::<String>("pull_url").is_some() {
+        // Pull reuses the shared consumer mappings (--event_key, --map_key_*, filters),
+        // so they must be parsed here too when no broker consumer pulled them in.
+        config = parse_consumer_arguments(matches, config);
+        config = parse_pull_arguments(matches, config);
+        consumers::pull::validate_pull_config(&config);
+    }
+
+    config
+}
+
+pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
+    config.pull_url = matches.get_one::<String>("pull_url").map(|s| s.to_string());
+    config.pull_name = matches.get_one::<String>("pull_name").map(|s| s.to_string());
+    config.pull_body = matches.get_one::<String>("pull_body").map(|s| s.to_string());
+    config.pull_items_path = matches
+        .get_one::<String>("pull_items_path")
+        .map(|s| s.to_string());
+
+    if let Some(headers) = matches.get_many::<String>("pull_header") {
+        config.pull_headers = headers.map(|s| s.to_string()).collect();
+        info!(
+            "{} static pull header(s) have been configured",
+            config.pull_headers.len()
+        );
+    }
+
+    if let Some(interval) = matches.get_one::<String>("pull_interval") {
+        config.pull_interval = interval
+            .parse::<u64>()
+            .expect("Failed to parse pull_interval as integer");
+    }
+
+    config.pull_auth = matches.get_one::<String>("pull_auth").map(|s| s.to_string());
+    config.pull_auth_header = matches
+        .get_one::<String>("pull_auth_header")
+        .map(|s| s.to_string());
+    config.pull_auth_value = matches
+        .get_one::<String>("pull_auth_value")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("ILERT_PULL_AUTH_VALUE").ok());
+    config.pull_username = matches
+        .get_one::<String>("pull_username")
+        .map(|s| s.to_string());
+    config.pull_password = matches
+        .get_one::<String>("pull_password")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("ILERT_PULL_PASSWORD").ok());
+    config.pull_token_url = matches
+        .get_one::<String>("pull_token_url")
+        .map(|s| s.to_string());
+    config.pull_client_id = matches
+        .get_one::<String>("pull_client_id")
+        .map(|s| s.to_string());
+    config.pull_client_secret = matches
+        .get_one::<String>("pull_client_secret")
+        .map(|s| s.to_string())
+        .or_else(|| std::env::var("ILERT_PULL_CLIENT_SECRET").ok());
+    config.pull_scope = matches
+        .get_one::<String>("pull_scope")
+        .map(|s| s.to_string());
+
+    config.pull_cursor_mode = matches
+        .get_one::<String>("pull_cursor_mode")
+        .map(|s| s.to_string());
+    config.pull_cursor_path = matches
+        .get_one::<String>("pull_cursor_path")
+        .map(|s| s.to_string());
+    config.pull_cursor_param = matches
+        .get_one::<String>("pull_cursor_param")
+        .map(|s| s.to_string());
+    config.pull_cursor_format = matches
+        .get_one::<String>("pull_cursor_format")
+        .map(|s| s.to_string());
+
+    if let Some(lookback) = matches.get_one::<String>("pull_initial_lookback") {
+        config.pull_initial_lookback = lookback
+            .parse::<u64>()
+            .expect("Failed to parse pull_initial_lookback as integer");
+    }
+
+    config.pull_dedup_key = matches
+        .get_one::<String>("pull_dedup_key")
+        .map(|s| s.to_string());
+
+    info!(
+        "Pull source configured: {}",
+        config.pull_url.as_deref().unwrap_or("?")
+    );
 
     config
 }
@@ -980,6 +1180,7 @@ async fn run_edge_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILert)
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: Some(EdgeConnectorProbeState::new()),
+        pull_probe: None,
     });
 
     let ctrlc_ctx = daemon_ctx.clone();
@@ -1050,6 +1251,12 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
         None
     };
 
+    let pull_probe = if config.pull_url.is_some() {
+        Some(PullProbeState::new())
+    } else {
+        None
+    };
+
     let daemon_ctx = Arc::new(DaemonContext {
         config: config.clone(),
         db: Mutex::new(db),
@@ -1058,6 +1265,7 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
         mqtt_probe,
         kafka_probe,
         edge_connector_probe: None,
+        pull_probe,
     });
 
     let ctrlc_ctx = daemon_ctx.clone();
@@ -1067,7 +1275,8 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
     })
     .expect("Error setting Ctrl-C handler");
 
-    let is_poll_needed = config.start_http || config.mqtt_buffer;
+    // Pull events land in event_items, so the queue drain job is mandatory for them.
+    let is_poll_needed = config.start_http || config.mqtt_buffer || config.pull_url.is_some();
     let mut poll_job = None;
     if is_poll_needed {
         info!("Starting poll job..");
@@ -1113,6 +1322,15 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
         }));
     }
 
+    let mut pull_job = None;
+    if config.pull_url.is_some() {
+        info!("Running pull connector..");
+        let cloned_ctx = daemon_ctx.clone();
+        pull_job = Some(tokio::spawn(async move {
+            consumers::pull::run_pull_job(cloned_ctx).await;
+        }));
+    }
+
     if config.start_http {
         let http_ctx = daemon_ctx.clone();
         let http_handle = tokio::spawn(async move {
@@ -1140,6 +1358,15 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
                     error!("Kafka worker panicked: {:?}", e);
                 }
                 kafka_job = None;
+            }
+            result = async { pull_job.as_mut().unwrap().await }, if pull_job.is_some() => {
+                if daemon_ctx.running.load(Ordering::Relaxed) {
+                    error!("Pull connector exited unexpectedly, initiating shutdown");
+                }
+                if let Err(e) = result {
+                    error!("Pull connector panicked: {:?}", e);
+                }
+                pull_job = None;
             }
         }
 
@@ -1170,6 +1397,11 @@ async fn run_normal_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILer
     if let Some(handle) = kafka_job {
         handle.await.expect("Failed to join kafka thread");
         debug!("kafka ended");
+    }
+
+    if let Some(handle) = pull_job {
+        handle.await.expect("Failed to join pull thread");
+        debug!("pull ended");
     }
 }
 

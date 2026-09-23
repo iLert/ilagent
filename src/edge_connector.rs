@@ -441,14 +441,7 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
     }
 }
 
-async fn interruptible_sleep(ctx: &Arc<DaemonContext>, secs: u64) {
-    for _ in 0..secs {
-        if !ctx.running.load(Ordering::Relaxed) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-}
+use crate::interruptible_sleep;
 
 pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
     let integration_key = ctx.config.edge_connector_key.as_ref().unwrap().clone();

@@ -318,6 +318,7 @@ fn test_daemon_ctx_all(
         mqtt_probe,
         kafka_probe,
         edge_connector_probe,
+        pull_probe: None,
     });
 
     (container, web::Data::new(daemon_ctx), file)
@@ -681,6 +682,7 @@ async fn post_event_applies_static_enrichment() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let daemon_data = web::Data::new(daemon_ctx);
 

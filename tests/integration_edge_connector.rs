@@ -45,6 +45,7 @@ fn build_ctx(config: ILConfig) -> Arc<DaemonContext> {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: Some(EdgeConnectorProbeState::new()),
+        pull_probe: None,
     })
 }
 
@@ -753,6 +754,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: Some(EdgeConnectorProbeState::new()),
+        pull_probe: None,
     });
 
     let job_ctx = ctx_a.clone();
@@ -813,6 +815,7 @@ async fn edge_connector_cursor_scoped_per_integration_key() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: Some(EdgeConnectorProbeState::new()),
+        pull_probe: None,
     });
 
     let job_ctx = ctx_b.clone();

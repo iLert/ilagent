@@ -18,6 +18,7 @@ const DB_MIGRATION_V6: &str = "mig_6";
 const DB_MIGRATION_V7: &str = "mig_7";
 const DB_MIGRATION_V8: &str = "mig_8";
 const DB_MIGRATION_V9: &str = "mig_9";
+const DB_MIGRATION_V10: &str = "mig_10";
 
 #[derive(Debug)]
 struct ILAgentItem {
@@ -195,6 +196,32 @@ impl ILDatabase {
             self.set_il_val(DB_MIGRATION_V9, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v9, set)");
             info!("Database migrated to {}", DB_MIGRATION_V9);
+        }
+
+        let mig_10 = self.get_il_value(DB_MIGRATION_V10);
+        if mig_10.is_none() {
+            self.conn
+                .execute(
+                    "CREATE TABLE pull_dedup (
+                      source             TEXT NOT NULL,
+                      dedup_key          TEXT NOT NULL,
+                      seen_at            DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+                      PRIMARY KEY (source, dedup_key)
+                  )",
+                    [],
+                )
+                .expect("Database migration failed (v10, 1)");
+
+            self.conn
+                .execute(
+                    "CREATE INDEX idx_pull_dedup_seen_at ON pull_dedup (seen_at)",
+                    [],
+                )
+                .expect("Database migration failed (v10, 2)");
+
+            self.set_il_val(DB_MIGRATION_V10, DB_MIGRATION_VAL)
+                .expect("Database migration failed (v10, set)");
+            info!("Database migrated to {}", DB_MIGRATION_V10);
         }
 
         /*
@@ -391,6 +418,57 @@ impl ILDatabase {
     pub fn delete_il_event(&self, id: &str) -> Result<usize, rusqlite::Error> {
         self.conn
             .execute("DELETE FROM event_items WHERE id = ?1", &[&id])
+    }
+
+    /// Insert an event and, when `dedup_key` is given, its dedup marker in one
+    /// transaction.
+    ///
+    /// These must not be separable. A dedup row committed without its event would
+    /// suppress that record on every future poll while it was never delivered — a silent
+    /// permanent drop rather than a retryable failure.
+    pub fn create_il_event_deduped(
+        &self,
+        item: &EventQueueItem,
+        source: &str,
+        dedup_key: Option<&str>,
+    ) -> Result<Option<EventQueueItem>, rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let created = self.create_il_event(item)?;
+        if let Some(key) = dedup_key {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO pull_dedup (source, dedup_key) VALUES (?1, ?2)",
+                &[&source as &dyn ToSql, &key],
+            )?;
+        }
+        tx.commit()?;
+        Ok(created)
+    }
+
+    pub fn pull_dedup_seen(
+        &self,
+        source: &str,
+        dedup_key: &str,
+    ) -> Result<bool, rusqlite::Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT 1 FROM pull_dedup WHERE source = ?1 AND dedup_key = ?2 LIMIT 1")?;
+        stmt.exists(&[&source as &dyn ToSql, &dedup_key])
+    }
+
+    /// Drop dedup markers older than `ttl_secs`. Bounds table growth; a record that
+    /// reappears after its marker expires is delivered again.
+    pub fn pull_dedup_sweep(&self, ttl_secs: i64) -> Result<usize, rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM pull_dedup WHERE seen_at < STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', ?1)",
+            &[&format!("-{} seconds", ttl_secs)],
+        )
+    }
+
+    /// Number of events waiting in the delivery queue. Used by the pull connector to
+    /// apply backpressure — fetching more while the queue is deep just grows the backlog.
+    pub fn count_il_events(&self) -> Result<i64, rusqlite::Error> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM event_items", [], |row| row.get(0))
     }
 
     pub fn create_mqtt_queue_item(

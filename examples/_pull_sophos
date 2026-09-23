@@ -1,0 +1,51 @@
+#!/bin/bash
+
+# Sophos Central SIEM events via the pull connector.
+#
+# One-time setup: Sophos hands you a tenant id and a regional API host, both permanent.
+# Fetch them once and paste the results below.
+#
+#   TOKEN=$(curl -s -X POST https://id.sophos.com/api/v2/oauth2/token \
+#       -d "grant_type=client_credentials&scope=token&client_id=$CID&client_secret=$SECRET" \
+#       | jq -r .access_token)
+#   curl -s -H "Authorization: Bearer $TOKEN" https://api.central.sophos.com/whoami/v1
+#   # => { "id": "<tenant-id>", "apiHosts": { "dataRegion": "https://api-eu01..." } }
+
+export ILERT_PULL_CLIENT_SECRET='<sophos client secret>'
+
+ilagent daemon -v -v \
+    --pull_url 'https://api-eu01.central.sophos.com/siem/v1/events' \
+    --pull_name sophos-events \
+    --pull_interval 300 \
+    --pull_header 'X-Tenant-ID=<tenant-id>' \
+    --pull_items_path items \
+    --pull_auth oauth2 \
+    --pull_token_url https://id.sophos.com/api/v2/oauth2/token \
+    --pull_client_id '<sophos client id>' \
+    --pull_scope token \
+    --pull_cursor_mode token \
+    --pull_cursor_path next_cursor \
+    --pull_cursor_param cursor \
+    --event_key 'il1api...' \
+    --map_key_summary name \
+    --map_key_alert_key id \
+    --map_key_severity severity \
+    --map_val_severity 'high=2' \
+    --map_val_severity 'medium=3' \
+    --map_val_severity 'low=4' \
+    --forward_message_payload \
+    --label 'source=sophos'
+
+# Sophos severity is a word, hence --map_val_severity. --forward_message_payload carries
+# the rest of the record (type, location, when, full_file_path) into customDetails so
+# ilert's event templating can use fields ilagent has no mapping for.
+#
+# from_date is optional: omitting it gives the last 12 hours on a first run (24h max).
+
+# Sophos exposes alerts on a second endpoint. Run it as its own agent with its own
+# --pull_name so the two cursors do not collide:
+#
+# ilagent daemon -v -v \
+#     --pull_url 'https://api-eu01.central.sophos.com/siem/v1/alerts?limit=1000' \
+#     --pull_name sophos-alerts \
+#     ... same flags ...
