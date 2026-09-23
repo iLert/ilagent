@@ -89,6 +89,11 @@ pub fn consumer_args() -> Vec<Arg> {
             .long("map_key_severity")
             .value_name("MAP_KEY_SEVERITY")
             .help("JSON path for severity field (string or number, 1-5)"),
+        Arg::new("map_val_severity")
+            .long("map_val_severity")
+            .value_name("VALUE=SEVERITY")
+            .action(ArgAction::Append)
+            .help("Maps a payload severity value to 1-5 (repeatable, e.g. --map_val_severity high=2). Case-insensitive, requires map_key_severity"),
         Arg::new("map_key_routing_key")
             .long("map_key_routing_key")
             .value_name("MAP_KEY_ROUTING_KEY")
@@ -422,7 +427,8 @@ const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buff
 
 // Repeatable (ArgAction::Append) consumer args — get_one would miss these, so they
 // need a get_many presence check in the edge-mode rejection loop.
-const EDGE_REJECTED_MULTI_ARGS: &[&str] = &["label", "map_key_label", "service"];
+const EDGE_REJECTED_MULTI_ARGS: &[&str] =
+    &["label", "map_key_label", "service", "map_val_severity"];
 
 pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
@@ -834,6 +840,42 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
         info!(
             "Severity field path has been configured: '{}'",
             map_key_severity
+        );
+    }
+
+    if let Some(map_val_severity) = matches.get_many::<String>("map_val_severity") {
+        config.map_val_severity = map_val_severity.map(|s| s.to_string()).collect();
+
+        // Validated eagerly rather than warned about at mapping time: a typo here would
+        // otherwise show up as silently missing severities long after startup.
+        for token in &config.map_val_severity {
+            let Some((name, level)) = token.split_once('=') else {
+                panic!(
+                    "--map_val_severity '{}' is malformed, expected VALUE=SEVERITY (e.g. high=2)",
+                    token
+                );
+            };
+            if name.trim().is_empty() {
+                panic!("--map_val_severity '{}' has an empty value name", token);
+            }
+            match level.trim().parse::<i32>() {
+                Ok(n) if (1..=5).contains(&n) => {}
+                _ => panic!(
+                    "--map_val_severity '{}' must map to a severity between 1 and 5",
+                    token
+                ),
+            }
+        }
+
+        if config.map_key_severity.is_none() {
+            warn!(
+                "--map_val_severity has no effect without --map_key_severity, which selects the payload field to translate"
+            );
+        }
+
+        info!(
+            "{} severity value mapping(s) have been configured",
+            config.map_val_severity.len()
         );
     }
 
@@ -1564,6 +1606,80 @@ mod tests {
         assert_eq!(config.severity.unwrap(), 3);
         assert_eq!(config.map_key_severity.unwrap(), "data.sev");
         assert_eq!(config.map_key_routing_key.unwrap(), "data.team");
+    }
+
+    #[test]
+    fn daemon_config_map_val_severity_repeatable() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--map_key_severity",
+                "severity",
+                "--map_val_severity",
+                "high=2",
+                "--map_val_severity",
+                "low=4",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        let config = build_daemon_config(sub, &m);
+        assert_eq!(
+            config.map_val_severity,
+            vec!["high=2".to_string(), "low=4".to_string()]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must map to a severity between 1 and 5")]
+    fn daemon_config_map_val_severity_out_of_range_panics() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--map_key_severity",
+                "severity",
+                "--map_val_severity",
+                "high=9",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m);
+    }
+
+    #[test]
+    #[should_panic(expected = "is malformed, expected VALUE=SEVERITY")]
+    fn daemon_config_map_val_severity_malformed_panics() {
+        let m = build_cli()
+            .try_get_matches_from(vec![
+                "ilagent",
+                "daemon",
+                "-m",
+                "broker.local",
+                "-e",
+                "ilert/events",
+                "--mqtt_qos",
+                "1",
+                "--map_key_severity",
+                "severity",
+                "--map_val_severity",
+                "highhh",
+            ])
+            .unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m);
     }
 
     #[test]

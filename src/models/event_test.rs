@@ -472,6 +472,83 @@ mod tests {
         assert!(event.severity.is_none());
     }
 
+    // --- map_val_severity: translating vendor words into ilert's 1-5 scale ---
+
+    #[test]
+    fn parse_event_map_val_severity_translates_words() {
+        let mut config = default_config();
+        config.map_key_severity = Some("severity".to_string());
+        config.map_val_severity = vec![
+            "high=2".to_string(),
+            "medium=3".to_string(),
+            "low=4".to_string(),
+        ];
+
+        for (word, expected) in [("high", 2), ("medium", 3), ("low", 4)] {
+            let payload = format!(
+                r#"{{"apiKey": "k1", "summary": "s", "severity": "{}"}}"#,
+                word
+            );
+            let event = EventQueueItemJson::parse_event_json(&config, &payload, "t1").unwrap();
+            assert_eq!(
+                event.severity.unwrap(),
+                expected,
+                "'{}' should map to {}",
+                word,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn parse_event_map_val_severity_is_case_insensitive() {
+        let mut config = default_config();
+        config.map_key_severity = Some("severity".to_string());
+        config.map_val_severity = vec!["high=2".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": "HIGH"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity.unwrap(), 2);
+    }
+
+    #[test]
+    fn parse_event_map_val_severity_unmapped_word_is_dropped() {
+        let mut config = default_config();
+        config.map_key_severity = Some("severity".to_string());
+        config.map_val_severity = vec!["high=2".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": "critical"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(
+            event.severity.is_none(),
+            "a word the map does not cover is not a number either, so it drops"
+        );
+    }
+
+    #[test]
+    fn parse_event_map_val_severity_numbers_still_work() {
+        let mut config = default_config();
+        config.map_key_severity = Some("severity".to_string());
+        config.map_val_severity = vec!["high=2".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 5}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(
+            event.severity.unwrap(),
+            5,
+            "a configured word map must not break sources that already send numbers"
+        );
+    }
+
+    #[test]
+    fn parse_event_map_val_severity_without_map_key_does_nothing() {
+        let mut config = default_config();
+        config.map_val_severity = vec!["high=2".to_string()];
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": "high"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert!(
+            event.severity.is_none(),
+            "the value map only applies to the field map_key_severity selects"
+        );
+    }
+
     #[test]
     fn parse_event_map_key_severity_valid_overrides_native() {
         let mut config = default_config();
