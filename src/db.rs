@@ -451,10 +451,12 @@ impl ILDatabase {
         source: &str,
         dedup_key: &str,
     ) -> Result<bool, rusqlite::Error> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT 1 FROM pull_dedup WHERE source = ?1 AND dedup_key = ?2 LIMIT 1")?;
-        stmt.exists(&[&source as &dyn ToSql, &dedup_key])
+        // Refresh seen_at so records the source keeps returning outlive the sweep TTL.
+        let updated = self.conn.execute(
+            "UPDATE pull_dedup SET seen_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') WHERE source = ?1 AND dedup_key = ?2",
+            &[&source as &dyn ToSql, &dedup_key],
+        )?;
+        Ok(updated > 0)
     }
 
     /// Drop dedup markers older than `ttl_secs` to bound table growth.

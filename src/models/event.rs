@@ -35,7 +35,7 @@ where
 {
     let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
     Ok(match value {
-        Some(serde_json::Value::Number(n)) => n.as_i64().map(|v| v as i32),
+        Some(serde_json::Value::Number(n)) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
         Some(serde_json::Value::String(s)) => s.trim().parse::<i32>().ok(),
         _ => None,
     })

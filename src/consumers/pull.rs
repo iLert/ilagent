@@ -623,8 +623,11 @@ async fn run_cycle(
                 .pull_cursor_path
                 .as_ref()
                 .and_then(|path| lookup_path(&body, path))
-                .and_then(|val| val.as_str())
-                .map(|s| s.to_string()),
+                .and_then(|val| match val {
+                    serde_json::Value::String(s) => Some(s.clone()),
+                    serde_json::Value::Number(n) => Some(n.to_string()),
+                    _ => None,
+                }),
             CursorMode::Timestamp => {
                 let path = config.pull_cursor_path.as_deref().unwrap_or_default();
                 let (max, distinct) = max_timestamp(&items, path, format);
