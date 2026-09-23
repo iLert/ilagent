@@ -49,6 +49,16 @@ stored cursor and every dedup row, silently replaying the whole lookback window.
 
 A path resolving to a single object is treated as one record.
 
+### Keys that contain a dot
+
+`--pull_items_path`, `--pull_cursor_path` and `--pull_dedup_key` all resolve a path the
+same way: an exact key match is tried first, and only if there is no such key are dots
+read as nesting. Vendor payloads carry keys like `@odata.count` or `alert.id` that are
+one key rather than a path, and those resolve correctly.
+
+The rule only matters when a response holds both — a literal `"a.b"` key *and* a nested
+`a` → `b` — in which case `a.b` picks the literal one.
+
 ## Authentication
 
 | mode | flags |
@@ -61,8 +71,18 @@ A path resolving to a single object is treated as one record.
 OAuth2 is client-credentials only. The token is cached, refreshed two minutes before it
 expires, and re-fetched once if the API returns a 401 in the meantime.
 
-Every secret has an environment variable fallback. Prefer it — a value passed as a flag
-is visible in the process list.
+`--pull_auth` selects the mode, and credentials are only sent for the mode selected.
+Passing a credential without its mode — `--pull_auth_value` with no `--pull_auth header`
+— is rejected at startup rather than sending the request unauthenticated, as are
+credentials belonging to a mode other than the one selected.
+
+Every secret has an environment variable fallback, read only for the selected mode.
+Prefer it — a value passed as a flag is visible in the process list.
+
+The pull url is never logged, since it routinely carries a key or token in its query
+string. That includes HTTP error messages, which would otherwise render it in full and
+are also served as the `error` field of `/ready`. Log lines identify the source by
+`--pull_name`.
 
 ## Resuming between polls
 
@@ -92,6 +112,13 @@ Keys containing dots work — an exact key match is tried before the path is tre
 nesting — so a vendor field like `@odata.count` resolves as one key rather than as
 nesting.
 
+Whether you also need `--pull_dedup_key` depends on what the API's cursor means. A cursor
+that marks a durable position in a stream resumes cleanly and needs no dedup. A cursor
+that only pages through a result set stops being returned once the pages run out, which
+leaves the stored cursor pinned to the last page — and that page is then re-fetched on
+every poll. The agent warns at startup when token mode runs without a dedup key; if you
+are unsure which kind you have, set one.
+
 ### `timestamp`
 
 The high-water mark is computed from the records themselves:
@@ -119,8 +146,9 @@ but it cannot fix it. Use a different cursor mode for such a source.
 
 ## Deduplication
 
-`--pull_dedup_key` is a dot-path to a stable unique id per record. Keys are remembered
-for seven days, then swept; a record reappearing after that is delivered again.
+`--pull_dedup_key` is a path to a stable unique id per record, resolved by the rule
+above. Keys are remembered for seven days, then swept; a record reappearing after that
+is delivered again.
 
 The dedup marker and the queued event are written in a single transaction. A marker
 without its event would suppress that record forever while it was never delivered.

@@ -817,8 +817,7 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
     }
 
     if matches.get_one::<String>("pull_url").is_some() {
-        // Pull reuses the shared consumer mappings (--event_key, --map_key_*, filters),
-        // so they must be parsed here too when no broker consumer pulled them in.
+        // Pull reuses the shared consumer mappings, so parse them when no broker did.
         config = parse_consumer_arguments(matches, config);
         config = parse_pull_arguments(matches, config);
         consumers::pull::validate_pull_config(&config);
@@ -850,20 +849,39 @@ pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
     }
 
     config.pull_auth = matches.get_one::<String>("pull_auth").map(|s| s.to_string());
+
+    // Read only for the selected mode: an ambient leftover must not look like a
+    // deliberately supplied credential to the mismatch check in validate_pull_config.
+    let auth_mode = config.pull_auth.as_deref().unwrap_or("none");
+    let secret_env = |mode: &str, var: &str| -> Option<String> {
+        if auth_mode != mode {
+            return None;
+        }
+        let value = std::env::var(var).ok();
+        // or_else is lazy, so reaching here means the environment really is the source.
+        if value.is_some() {
+            info!(
+                "Pull secret has been configured from {} environment variable",
+                var
+            );
+        }
+        value
+    };
+
     config.pull_auth_header = matches
         .get_one::<String>("pull_auth_header")
         .map(|s| s.to_string());
     config.pull_auth_value = matches
         .get_one::<String>("pull_auth_value")
         .map(|s| s.to_string())
-        .or_else(|| std::env::var("ILERT_PULL_AUTH_VALUE").ok());
+        .or_else(|| secret_env("header", "ILERT_PULL_AUTH_VALUE"));
     config.pull_username = matches
         .get_one::<String>("pull_username")
         .map(|s| s.to_string());
     config.pull_password = matches
         .get_one::<String>("pull_password")
         .map(|s| s.to_string())
-        .or_else(|| std::env::var("ILERT_PULL_PASSWORD").ok());
+        .or_else(|| secret_env("basic", "ILERT_PULL_PASSWORD"));
     config.pull_token_url = matches
         .get_one::<String>("pull_token_url")
         .map(|s| s.to_string());
@@ -873,7 +891,7 @@ pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
     config.pull_client_secret = matches
         .get_one::<String>("pull_client_secret")
         .map(|s| s.to_string())
-        .or_else(|| std::env::var("ILERT_PULL_CLIENT_SECRET").ok());
+        .or_else(|| secret_env("oauth2", "ILERT_PULL_CLIENT_SECRET"));
     config.pull_scope = matches
         .get_one::<String>("pull_scope")
         .map(|s| s.to_string());
@@ -901,9 +919,10 @@ pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
         .get_one::<String>("pull_dedup_key")
         .map(|s| s.to_string());
 
+    // The url is not logged: it routinely carries a key or token in its query string.
     info!(
-        "Pull source configured: {}",
-        config.pull_url.as_deref().unwrap_or("?")
+        "Pull source configured: '{}'",
+        config.pull_name.as_deref().unwrap_or("?")
     );
 
     config
@@ -1046,8 +1065,7 @@ pub fn parse_consumer_arguments(matches: &ArgMatches, mut config: ILConfig) -> I
     if let Some(map_val_severity) = matches.get_many::<String>("map_val_severity") {
         config.map_val_severity = map_val_severity.map(|s| s.to_string()).collect();
 
-        // Validated eagerly rather than warned about at mapping time: a typo here would
-        // otherwise show up as silently missing severities long after startup.
+        // Validated eagerly: a typo would otherwise surface as missing severities later.
         for token in &config.map_val_severity {
             let Some((name, level)) = token.split_once('=') else {
                 panic!(
@@ -2093,6 +2111,108 @@ mod tests {
         let config = build_daemon_config(sub, &m);
         assert!(config.event_key.is_none());
         assert!(config.filter_key.is_none());
+    }
+
+    // --- build_daemon_config: pull connector ---
+
+    /// Each secret env var is read only for its own auth mode, so a stale variable
+    /// cannot trip the cross-mode check and refuse to start a correct agent.
+    /// One test to avoid env var races, as with the policy and edge connector tests.
+    #[test]
+    fn daemon_config_pull_secret_env_fallbacks_are_scoped_to_their_mode() {
+        unsafe {
+            std::env::set_var("ILERT_PULL_AUTH_VALUE", "env-header-value");
+            std::env::set_var("ILERT_PULL_PASSWORD", "env-password");
+            std::env::set_var("ILERT_PULL_CLIENT_SECRET", "env-client-secret");
+        }
+
+        // header mode: only ILERT_PULL_AUTH_VALUE is its own
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--pull_url",
+                    "https://alerts.internal/api/open",
+                    "--pull_name",
+                    "internal",
+                    "--event_key",
+                    "il1api123",
+                    "--pull_auth",
+                    "header",
+                    "--pull_auth_header",
+                    "X-API-Key",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+
+            assert_eq!(config.pull_auth_value.unwrap(), "env-header-value");
+            assert!(
+                config.pull_password.is_none(),
+                "a basic credential must not be loaded from the environment in header mode"
+            );
+            assert!(
+                config.pull_client_secret.is_none(),
+                "an oauth credential must not be loaded from the environment in header mode"
+            );
+        }
+
+        // oauth2 mode: only ILERT_PULL_CLIENT_SECRET is its own
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--pull_url",
+                    "https://alerts.internal/api/open",
+                    "--pull_name",
+                    "internal",
+                    "--event_key",
+                    "il1api123",
+                    "--pull_auth",
+                    "oauth2",
+                    "--pull_token_url",
+                    "https://id.example.com/token",
+                    "--pull_client_id",
+                    "cid",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+
+            assert_eq!(config.pull_client_secret.unwrap(), "env-client-secret");
+            assert!(config.pull_auth_value.is_none());
+            assert!(config.pull_password.is_none());
+        }
+
+        // no auth mode selected: nothing ambient is picked up at all
+        {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--pull_url",
+                    "https://alerts.internal/api/open",
+                    "--pull_name",
+                    "internal",
+                    "--event_key",
+                    "il1api123",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            let config = build_daemon_config(sub, &m);
+
+            assert!(config.pull_auth_value.is_none());
+            assert!(config.pull_password.is_none());
+            assert!(config.pull_client_secret.is_none());
+        }
+
+        unsafe {
+            std::env::remove_var("ILERT_PULL_AUTH_VALUE");
+            std::env::remove_var("ILERT_PULL_PASSWORD");
+            std::env::remove_var("ILERT_PULL_CLIENT_SECRET");
+        }
     }
 
     // --- build_daemon_config: edge connector ---

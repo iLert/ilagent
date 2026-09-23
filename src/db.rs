@@ -420,12 +420,8 @@ impl ILDatabase {
             .execute("DELETE FROM event_items WHERE id = ?1", &[&id])
     }
 
-    /// Insert an event and, when `dedup_key` is given, its dedup marker in one
-    /// transaction.
-    ///
-    /// These must not be separable. A dedup row committed without its event would
-    /// suppress that record on every future poll while it was never delivered — a silent
-    /// permanent drop rather than a retryable failure.
+    /// Insert an event and its dedup marker in one transaction. A marker committed
+    /// without its event would suppress that record forever while it was never sent.
     pub fn create_il_event_deduped(
         &self,
         item: &EventQueueItem,
@@ -434,6 +430,12 @@ impl ILDatabase {
     ) -> Result<Option<EventQueueItem>, rusqlite::Error> {
         let tx = self.conn.unchecked_transaction()?;
         let created = self.create_il_event(item)?;
+
+        // Cannot confirm the event is queued, so roll back; the caller retries on None.
+        if created.is_none() {
+            return Ok(None);
+        }
+
         if let Some(key) = dedup_key {
             self.conn.execute(
                 "INSERT OR REPLACE INTO pull_dedup (source, dedup_key) VALUES (?1, ?2)",
@@ -455,8 +457,7 @@ impl ILDatabase {
         stmt.exists(&[&source as &dyn ToSql, &dedup_key])
     }
 
-    /// Drop dedup markers older than `ttl_secs`. Bounds table growth; a record that
-    /// reappears after its marker expires is delivered again.
+    /// Drop dedup markers older than `ttl_secs` to bound table growth.
     pub fn pull_dedup_sweep(&self, ttl_secs: i64) -> Result<usize, rusqlite::Error> {
         self.conn.execute(
             "DELETE FROM pull_dedup WHERE seen_at < STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', ?1)",
@@ -464,8 +465,7 @@ impl ILDatabase {
         )
     }
 
-    /// Number of events waiting in the delivery queue. Used by the pull connector to
-    /// apply backpressure — fetching more while the queue is deep just grows the backlog.
+    /// Queue depth, used by the pull connector for backpressure.
     pub fn count_il_events(&self) -> Result<i64, rusqlite::Error> {
         self.conn
             .query_row("SELECT COUNT(*) FROM event_items", [], |row| row.get(0))

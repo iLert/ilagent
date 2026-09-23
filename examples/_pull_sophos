@@ -11,9 +11,9 @@
 #   curl -s -H "Authorization: Bearer $TOKEN" https://api.central.sophos.com/whoami/v1
 #   # => { "id": "<tenant-id>", "apiHosts": { "dataRegion": "https://api-eu01..." } }
 
-export ILERT_PULL_CLIENT_SECRET='<sophos client secret>'
-
-ilagent daemon -v -v \
+# Passed inline rather than exported, so the secret stays out of the rest of the shell
+# session and out of the process list, where a --pull_client_secret flag would put it.
+ILERT_PULL_CLIENT_SECRET='<sophos client secret>' ilagent daemon -v -v \
     --pull_url 'https://api-eu01.central.sophos.com/siem/v1/events' \
     --pull_name sophos-events \
     --pull_interval 300 \
@@ -26,6 +26,7 @@ ilagent daemon -v -v \
     --pull_cursor_mode token \
     --pull_cursor_path next_cursor \
     --pull_cursor_param cursor \
+    --pull_dedup_key id \
     --event_key 'il1api...' \
     --map_key_summary name \
     --map_key_alert_key id \
@@ -36,12 +37,11 @@ ilagent daemon -v -v \
     --forward_message_payload \
     --label 'source=sophos'
 
+# --pull_dedup_key covers a cursor replay and silences the token-mode warning.
 # Sophos severity is a word, hence --map_val_severity. --forward_message_payload carries
 # the rest of the record (type, location, when, full_file_path) into customDetails so
 # ilert's event templating can use fields ilagent has no mapping for.
 #
-# from_date is optional: omitting it gives the last 12 hours on a first run (24h max).
-
 # Sophos exposes alerts on a second endpoint. Run it as its own agent with its own
 # --pull_name so the two cursors do not collide:
 #

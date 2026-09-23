@@ -25,16 +25,10 @@ pub struct EventQueueItemJson {
     pub services: Option<Vec<EventServiceRef>>,
 }
 
-/// Accept a severity that is a number, a numeric string, or neither.
-///
-/// Consumer payloads routinely carry a vendor severity as a word ("high", "medium").
-/// A strict `Option<i32>` would fail the whole deserialize and drop the event before
-/// `map_key_severity` / `map_val_severity` ever ran — contradicting the rule below that
-/// a bad severity is dropped but never fails the event. Anything unparseable lands as
-/// None here and is resolved afterwards from the raw JSON, if a mapping is configured.
-///
-/// Only the consumer transition struct is lenient. `EventQueueItemJson` stays strict so
-/// the HTTP endpoint keeps rejecting malformed input with a 400.
+/// A vendor severity is often a word, which a strict `Option<i32>` would reject before
+/// map_key_severity ever ran. Unparseable lands as None and is resolved from the raw
+/// JSON afterwards. Only this transition struct is lenient; the HTTP endpoint stays
+/// strict and keeps returning 400.
 fn deserialize_lenient_severity<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -385,10 +379,8 @@ impl EventQueueItemJson {
         // severity rather than falling back to the payload-native value
         if let Some(ref map_key_severity) = config.map_key_severity {
             if let Some(val) = get_nested_value(&json, map_key_severity) {
-                // A configured value map translates vendor words ("high", "medium") into
-                // ilert's 1-5 scale. Matching is case-insensitive; a value the map does
-                // not cover falls through to the numeric parse below, so sources that
-                // already send numbers keep working unchanged.
+                // Case-insensitive; an uncovered value falls through to the numeric
+                // parse, so sources already sending 1-5 are unaffected.
                 let mapped = match val {
                     serde_json::Value::String(s) if !config.map_val_severity.is_empty() => {
                         config.map_val_severity.iter().find_map(|token| {

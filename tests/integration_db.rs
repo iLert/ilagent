@@ -22,6 +22,8 @@ fn migrations_run_on_fresh_db() {
     assert_eq!(db.get_il_value("mig_7").unwrap(), "1");
     assert_eq!(db.get_il_value("mig_8").unwrap(), "1");
     assert_eq!(db.get_il_value("mig_9").unwrap(), "1");
+    // pull dedup table
+    assert_eq!(db.get_il_value("mig_10").unwrap(), "1");
 }
 
 #[test]
@@ -227,4 +229,65 @@ fn set_il_value_updates_existing() {
 fn get_missing_value_returns_none() {
     let (db, _f) = temp_db();
     assert!(db.get_il_value("nonexistent").is_none());
+}
+
+// --- pull dedup ---
+
+#[test]
+fn dedup_markers_are_scoped_per_source() {
+    let (db, _f) = temp_db();
+
+    let event = EventQueueItem::new_with_required("k1", "ALERT", "disk full", None);
+    db.create_il_event_deduped(&event, "sophos", Some("rec-1"))
+        .unwrap();
+
+    // two agents sharing one db file must not suppress each other's records
+    assert!(db.pull_dedup_seen("sophos", "rec-1").unwrap());
+    assert!(!db.pull_dedup_seen("zabbix", "rec-1").unwrap());
+}
+
+#[test]
+fn failed_event_insert_leaves_no_dedup_marker() {
+    let (db, _f) = temp_db();
+
+    // claim the id so the second insert violates the primary key
+    let mut first = EventQueueItem::new_with_required("k1", "ALERT", "first", None);
+    first.id = Some("collide".to_string());
+    db.create_il_event_deduped(&first, "sophos", Some("rec-1"))
+        .unwrap();
+
+    let mut second = EventQueueItem::new_with_required("k1", "ALERT", "second", None);
+    second.id = Some("collide".to_string());
+    let result = db.create_il_event_deduped(&second, "sophos", Some("rec-2"));
+
+    assert!(result.is_err(), "duplicate id should fail the insert");
+    // a marker without its event would suppress rec-2 forever while it was never sent
+    assert!(
+        !db.pull_dedup_seen("sophos", "rec-2").unwrap(),
+        "dedup marker must roll back with the failed event insert"
+    );
+    assert_eq!(db.count_il_events().unwrap(), 1);
+}
+
+#[test]
+fn sweep_drops_expired_markers_and_keeps_fresh_ones() {
+    let (db, _f) = temp_db();
+
+    let event = EventQueueItem::new_with_required("k1", "ALERT", "fresh", None);
+    db.create_il_event_deduped(&event, "sophos", Some("fresh"))
+        .unwrap();
+
+    // seen_at is millisecond precision and the sweep compares with `<`
+    std::thread::sleep(std::time::Duration::from_millis(20));
+
+    let removed = db.pull_dedup_sweep(0).unwrap();
+    assert_eq!(removed, 1);
+    assert!(!db.pull_dedup_seen("sophos", "fresh").unwrap());
+
+    let event = EventQueueItem::new_with_required("k1", "ALERT", "kept", None);
+    db.create_il_event_deduped(&event, "sophos", Some("kept"))
+        .unwrap();
+
+    assert_eq!(db.pull_dedup_sweep(3600).unwrap(), 0);
+    assert!(db.pull_dedup_seen("sophos", "kept").unwrap());
 }

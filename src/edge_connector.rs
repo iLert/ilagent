@@ -5,7 +5,7 @@ use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::Deserialize;
 
-use crate::DaemonContext;
+use crate::{DaemonContext, interruptible_sleep};
 const DEFAULT_LIMIT: i64 = 100;
 const DEFAULT_API_HOST: &str = "https://api.ilert.com";
 pub const MAX_CONSECUTIVE_REPOLLS: u32 = 10;
@@ -440,8 +440,6 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
         ),
     }
 }
-
-use crate::interruptible_sleep;
 
 pub async fn run_edge_connector_job(ctx: Arc<DaemonContext>) {
     let integration_key = ctx.config.edge_connector_key.as_ref().unwrap().clone();

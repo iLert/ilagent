@@ -186,9 +186,7 @@ pub struct DaemonContext {
     pub pull_probe: Option<PullProbeState>,
 }
 
-/// Sleep for `secs`, waking every second to check whether the daemon is shutting down.
-/// A plain `sleep` here would block Ctrl+C for the whole interval — up to an hour at the
-/// pull connector's 3600s ceiling.
+/// Sleep in 1s steps so a shutdown is not blocked for the whole interval.
 pub async fn interruptible_sleep(ctx: &std::sync::Arc<DaemonContext>, secs: u64) {
     for _ in 0..secs {
         if !ctx.running.load(Ordering::Relaxed) {

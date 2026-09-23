@@ -14,17 +14,13 @@ const BACKOFF_BASE_SECS: u64 = 5;
 const BACKOFF_MAX_SECS: u64 = 300;
 const OAUTH_REFRESH_MARGIN_SECS: u64 = 120;
 
-/// Dedup markers older than this are swept. A record reappearing after its marker
-/// expires is delivered again.
+/// Dedup markers older than this are swept; a record reappearing after that is re-sent.
 pub const DEDUP_TTL_SECS: i64 = 604800; // 7 days
 
-/// Pages fetched in a single cycle before pausing until the next interval, mirroring
-/// `MAX_CONSECUTIVE_REPOLLS` in the edge connector.
+/// Pages per cycle, mirroring MAX_CONSECUTIVE_REPOLLS in the edge connector.
 pub const MAX_CONSECUTIVE_PAGES: u32 = 10;
 
-/// Skip a fetch while this many events are already waiting for delivery. `poll.rs`
-/// drains 50 at a time with a 500ms floor and one POST each, so an unchecked fetch loop
-/// can queue faster than the queue drains.
+/// Skip a fetch while this many events are queued; poll.rs drains slower than we fetch.
 pub const QUEUE_BACKPRESSURE_THRESHOLD: i64 = 5000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,11 +57,8 @@ impl TimestampFormat {
     }
 }
 
-/// A cycle failure. `Unauthorized` is separated from the rest because the oauth path
-/// reacts to it specifically — a token can be revoked before its stated expiry, so a 401
-/// earns one retry with a fresh token. Matching on a variant rather than on substrings in
-/// a formatted message keeps an unrelated error that happens to contain "401" (a URL with
-/// that port, an upstream body quoting it) from triggering a pointless token refresh.
+/// Unauthorized is its own variant so the oauth retry cannot be triggered by an
+/// unrelated error whose message happens to contain "401".
 #[derive(Debug)]
 pub enum PullError {
     Unauthorized,
@@ -108,12 +101,8 @@ pub fn cursor_db_key(name: &str) -> String {
     format!("pull_cursor:{}", name)
 }
 
-/// Look up a path, preferring an exact key match before treating dots as nesting.
-///
-/// `get_nested_value` always splits on '.', which breaks on keys that legitimately
-/// contain one — `@odata.count`, `alert.id` and similar vendor keys reachable through
-/// `--pull_items_path`, `--pull_cursor_path` and `--pull_dedup_key`. Kept local rather
-/// than changed in `json_util` so the shared mapping behaviour is untouched.
+/// Exact key match before dots are read as nesting, for vendor keys like `@odata.count`.
+/// Local rather than in json_util so the shared mapping behaviour is untouched.
 fn lookup_path<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
     if let Some(val) = json.get(path) {
         return Some(val);
@@ -121,8 +110,7 @@ fn lookup_path<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
     get_nested_value(json, path)
 }
 
-/// Pull the record array out of a response body. With no configured path the whole body
-/// is used; a path resolving to a single object yields one record.
+/// Record array from a body; no path means the whole body, an object means one record.
 pub fn extract_items(body: &Value, items_path: Option<&str>) -> Vec<Value> {
     let target = match items_path {
         Some(path) => match lookup_path(body, path) {
@@ -178,11 +166,8 @@ pub fn render_timestamp(millis: i64, format: TimestampFormat) -> String {
     }
 }
 
-/// Highest timestamp across a page, plus how many distinct values were seen.
-///
-/// The count is what detects the coarse-resolution pathology: a page whose records all
-/// share one timestamp cannot advance an inclusive cursor, so any records beyond that
-/// page are unreachable.
+/// Highest timestamp on a page, plus distinct count — a page sharing one timestamp
+/// cannot advance an inclusive cursor.
 pub fn max_timestamp(items: &[Value], path: &str, format: TimestampFormat) -> (Option<i64>, usize) {
     let mut seen: Vec<i64> = Vec::new();
     for item in items {
@@ -266,6 +251,47 @@ pub fn validate_pull_config(config: &ILConfig) {
         ),
     }
 
+    // fetch_page dispatches on pull_auth alone, so a credential without its mode is
+    // dropped and every request goes out unauthenticated.
+    let selected = config.pull_auth.as_deref().unwrap_or("none");
+    for (mode, flags) in [
+        (
+            "header",
+            vec![
+                ("--pull_auth_header", config.pull_auth_header.is_some()),
+                ("--pull_auth_value", config.pull_auth_value.is_some()),
+            ],
+        ),
+        (
+            "basic",
+            vec![
+                ("--pull_username", config.pull_username.is_some()),
+                ("--pull_password", config.pull_password.is_some()),
+            ],
+        ),
+        (
+            "oauth2",
+            vec![
+                ("--pull_token_url", config.pull_token_url.is_some()),
+                ("--pull_client_id", config.pull_client_id.is_some()),
+                ("--pull_client_secret", config.pull_client_secret.is_some()),
+                ("--pull_scope", config.pull_scope.is_some()),
+            ],
+        ),
+    ] {
+        if selected == mode {
+            continue;
+        }
+        for (flag, is_set) in flags {
+            if is_set {
+                panic!(
+                    "{} requires --pull_auth {}, but pull_auth is '{}' — the credential would be ignored and every request sent unauthenticated",
+                    flag, mode, selected
+                );
+            }
+        }
+    }
+
     let mode = CursorMode::from_config(config);
 
     match mode {
@@ -280,9 +306,7 @@ pub fn validate_pull_config(config: &ILConfig) {
         CursorMode::None => {}
     }
 
-    // The cursor travels as a query parameter. A body-bearing endpoint (JSON-RPC, search
-    // APIs) generally expects it inside the body and ignores the query string, so the
-    // combination would silently re-fetch the same window forever.
+    // The cursor is a query param, which a body-bearing endpoint ignores.
     if config.pull_body.is_some() && matches!(mode, CursorMode::Token | CursorMode::Timestamp) {
         panic!(
             "--pull_body cannot be combined with pull_cursor_mode '{}' — the cursor is sent as a query parameter and a body-bearing endpoint would ignore it",
@@ -300,6 +324,13 @@ pub fn validate_pull_config(config: &ILConfig) {
     if mode == CursorMode::None && config.pull_dedup_key.is_none() {
         warn!(
             "Pull source has no cursor and no --pull_dedup_key: every record will be re-sent on every poll, relying entirely on ilert's alertKey deduplication"
+        );
+    }
+
+    // Only a warning: a durable watermark needs no dedup, a pagination handle does.
+    if mode == CursorMode::Token && config.pull_dedup_key.is_none() {
+        warn!(
+            "Pull source uses a token cursor without --pull_dedup_key: if this API's cursor only pages through a result set rather than marking a durable position, the last page will be re-sent on every poll"
         );
     }
 }
@@ -329,7 +360,8 @@ async fn fetch_oauth_token(
         .form(&form)
         .send()
         .await
-        .map_err(|e| format!("oauth token request failed: {}", e))?;
+        // without_url: reqwest's Display renders the full url, query string included.
+        .map_err(|e| format!("oauth token request failed: {}", e.without_url()))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -339,7 +371,7 @@ async fn fetch_oauth_token(
     let body: Value = response
         .json()
         .await
-        .map_err(|e| format!("failed to parse oauth token response: {}", e))?;
+        .map_err(|e| format!("failed to parse oauth token response: {}", e.without_url()))?;
 
     let access_token = body
         .get("access_token")
@@ -347,8 +379,7 @@ async fn fetch_oauth_token(
         .ok_or("oauth token response has no access_token")?
         .to_string();
 
-    // Refresh ahead of the stated expiry so an in-flight request cannot land on an
-    // already-dead token.
+    // Refresh ahead of expiry so an in-flight request cannot land on a dead token.
     let expires_in = body
         .get("expires_in")
         .and_then(|v| v.as_u64())
@@ -388,10 +419,19 @@ async fn fetch_page(
             Some((key, value)) if !key.trim().is_empty() => {
                 request = request.header(key.trim(), value);
             }
-            _ => warn!(
-                "Ignoring malformed --pull_header '{}', expected key=value",
-                token
-            ),
+            _ => {
+                // Only the leading name is logged: a ':' where a '=' belongs leaves a
+                // live credential in the remainder.
+                let name = token
+                    .split([':', '=', ' '])
+                    .next()
+                    .unwrap_or_default()
+                    .trim();
+                warn!(
+                    "Ignoring malformed --pull_header starting '{}', expected key=value",
+                    name
+                );
+            }
         }
     }
 
@@ -423,7 +463,8 @@ async fn fetch_page(
     let response = request
         .send()
         .await
-        .map_err(|e| PullError::Other(format!("pull request failed: {}", e)))?;
+        // without_url: this string is logged and served as the `error` field of /ready.
+        .map_err(|e| PullError::Other(format!("pull request failed: {}", e.without_url())))?;
 
     let status = response.status();
     if status.as_u16() == 401 {
@@ -436,10 +477,12 @@ async fn fetch_page(
         )));
     }
 
-    response
-        .json::<Value>()
-        .await
-        .map_err(|e| PullError::Other(format!("failed to parse pull response as json: {}", e)))
+    response.json::<Value>().await.map_err(|e| {
+        PullError::Other(format!(
+            "failed to parse pull response as json: {}",
+            e.without_url()
+        ))
+    })
 }
 
 /// Enqueue one record. Returns true when it was inserted, false when deduped or filtered.
@@ -493,8 +536,7 @@ async fn enqueue_record(
             None => return Ok(false), // filtered or unparseable, already logged
         };
 
-    // No typed api path: pull events post to plain /events with the integration key in
-    // the body, the same as the `ilagent event` subcommand.
+    // No typed api path: pull events post to plain /events, like the event subcommand.
     let db_event = EventQueueItemJson::to_db(event, None);
 
     let result =
@@ -517,8 +559,8 @@ async fn enqueue_record(
     }
 }
 
-/// Fetch and enqueue everything currently available. Returns how many records were
-/// enqueued. Any error leaves the stored cursor untouched so the page is retried.
+/// Fetch and enqueue what is available, returning the count. An error leaves that page's
+/// cursor untouched so it is retried.
 async fn run_cycle(
     ctx: &Arc<DaemonContext>,
     client: &reqwest::Client,
@@ -532,8 +574,7 @@ async fn run_cycle(
 
     let mut cursor: Option<String> = ctx.db.lock().await.get_il_value(&cursor_key);
 
-    // Timestamp mode has nothing to resume from on a first run, and omitting the
-    // parameter entirely would mean "all of history" or "nothing" depending on the API.
+    // Nothing to resume from on a first run, and omitting the param is API-dependent.
     if mode == CursorMode::Timestamp && cursor.is_none() {
         let seed =
             chrono::Utc::now().timestamp_millis() - (config.pull_initial_lookback as i64 * 1000);
@@ -609,8 +650,7 @@ async fn run_cycle(
             break;
         };
 
-        // The cursor is only durable once every record on the page is committed — a
-        // partial page must be re-fetched, not skipped.
+        // Only advance once every record on the page is committed.
         if cursor.as_deref() == Some(next.as_str()) {
             debug!("Pull source '{}' cursor unchanged, cycle done", source);
             break;
@@ -658,12 +698,10 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         probe.polling.store(true, Ordering::Relaxed);
     }
 
+    // The url is not logged: it routinely carries a key or token in its query string.
     info!(
-        "Pull source '{}' polling {} every {}s (cursor: {:?})",
-        source,
-        ctx.config.pull_url.as_deref().unwrap_or("?"),
-        interval,
-        mode
+        "Pull source '{}' polling every {}s (cursor: {:?})",
+        source, interval, mode
     );
 
     loop {
@@ -704,8 +742,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         let bearer = token.as_ref().map(|t| t.access_token.clone());
         let mut result = run_cycle(&ctx, &client, &source, mode, bearer.as_deref()).await;
 
-        // A token can be revoked before its stated expiry; retry once with a fresh one
-        // before treating the cycle as failed.
+        // A token can be revoked before its stated expiry; retry once with a fresh one.
         if uses_oauth && matches!(&result, Err(PullError::Unauthorized)) {
             info!(
                 "Pull source '{}' got 401, refreshing token and retrying",
@@ -759,8 +796,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
 }
 
 fn backoff_secs(attempt: u32) -> u64 {
-    // saturating_mul, not `*`: saturating_pow alone still overflows the multiply once
-    // the exponent passes ~62, which panics in debug builds.
+    // saturating_mul: saturating_pow alone still overflows the multiply past ~62.
     BACKOFF_BASE_SECS
         .saturating_mul(2u64.saturating_pow(attempt.saturating_sub(1)))
         .min(BACKOFF_MAX_SECS)
@@ -1047,6 +1083,94 @@ mod tests {
         let mut config = base_config();
         config.pull_auth = Some("header".to_string());
         config.pull_auth_header = Some("X-API-Key".to_string());
+        validate_pull_config(&config);
+    }
+
+    // --- auth credentials supplied without the matching mode ---
+
+    #[test]
+    #[should_panic(expected = "--pull_auth_header requires --pull_auth header")]
+    fn validate_rejects_header_credentials_without_mode() {
+        // These flags would be dropped and every request sent unauthenticated.
+        let mut config = base_config();
+        config.pull_auth_header = Some("X-API-Key".to_string());
+        config.pull_auth_value = Some("secret".to_string());
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    #[should_panic(expected = "--pull_username requires --pull_auth basic")]
+    fn validate_rejects_basic_credentials_without_mode() {
+        let mut config = base_config();
+        config.pull_username = Some("svc".to_string());
+        config.pull_password = Some("secret".to_string());
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    #[should_panic(expected = "--pull_token_url requires --pull_auth oauth2")]
+    fn validate_rejects_oauth_credentials_without_mode() {
+        let mut config = base_config();
+        config.pull_token_url = Some("https://id.example.com/token".to_string());
+        config.pull_client_id = Some("cid".to_string());
+        config.pull_client_secret = Some("secret".to_string());
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "--pull_username requires --pull_auth basic, but pull_auth is 'oauth2'"
+    )]
+    fn validate_rejects_credentials_belonging_to_another_mode() {
+        // oauth2 is correct, but the stray basic credentials are inert and must not pass.
+        let mut config = base_config();
+        config.pull_auth = Some("oauth2".to_string());
+        config.pull_token_url = Some("https://id.example.com/token".to_string());
+        config.pull_client_id = Some("cid".to_string());
+        config.pull_client_secret = Some("secret".to_string());
+        config.pull_username = Some("leftover".to_string());
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    #[should_panic(expected = "--pull_scope requires --pull_auth oauth2")]
+    fn validate_rejects_scope_without_oauth() {
+        let mut config = base_config();
+        config.pull_auth = Some("header".to_string());
+        config.pull_auth_header = Some("X-API-Key".to_string());
+        config.pull_auth_value = Some("secret".to_string());
+        config.pull_scope = Some("token".to_string());
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    fn validate_accepts_each_mode_with_only_its_own_credentials() {
+        // The check must not be satisfiable by rejecting everything.
+        let mut header = base_config();
+        header.pull_auth = Some("header".to_string());
+        header.pull_auth_header = Some("X-API-Key".to_string());
+        header.pull_auth_value = Some("secret".to_string());
+        validate_pull_config(&header);
+
+        let mut basic = base_config();
+        basic.pull_auth = Some("basic".to_string());
+        basic.pull_username = Some("svc".to_string());
+        basic.pull_password = Some("secret".to_string());
+        validate_pull_config(&basic);
+
+        let mut oauth = base_config();
+        oauth.pull_auth = Some("oauth2".to_string());
+        oauth.pull_token_url = Some("https://id.example.com/token".to_string());
+        oauth.pull_client_id = Some("cid".to_string());
+        oauth.pull_client_secret = Some("secret".to_string());
+        oauth.pull_scope = Some("token".to_string());
+        validate_pull_config(&oauth);
+    }
+
+    #[test]
+    fn validate_accepts_explicit_none_auth_with_no_credentials() {
+        let mut config = base_config();
+        config.pull_auth = Some("none".to_string());
         validate_pull_config(&config);
     }
 

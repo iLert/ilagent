@@ -146,8 +146,7 @@ async fn pull_without_dedup_key_re_enqueues_every_cycle() {
     let ctx = build_ctx(config);
     run_for(ctx.clone(), 4).await;
 
-    // This is the documented cost of running without a dedup key — asserted so the
-    // behaviour is deliberate rather than accidental.
+    // the documented cost of running without a dedup key
     assert!(
         queued_events(&ctx).await.len() > 1,
         "without a dedup key the same record is re-enqueued on every poll"
@@ -211,8 +210,7 @@ async fn pull_token_cursor_pages_and_persists() {
 async fn pull_stops_paging_when_cursor_repeats() {
     let server = MockServer::start().await;
 
-    // A server that always claims the same next cursor would loop forever without the
-    // unchanged-cursor guard.
+    // without the unchanged-cursor guard a repeated cursor would loop forever
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [{"id": "stuck"}],
@@ -482,8 +480,7 @@ async fn pull_applies_backpressure_when_queue_is_deep() {
 async fn pull_maps_word_severity_from_sophos_shaped_record() {
     let server = MockServer::start().await;
 
-    // Shaped like a real Sophos Central SIEM event: severity is a word, and it sits on
-    // the top-level `severity` key that collides with ilert's own typed field.
+    // Sophos-shaped: severity is a word on the key that collides with ilert's own
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "items": [
@@ -526,4 +523,41 @@ async fn pull_maps_word_severity_from_sophos_shaped_record() {
 
     assert_eq!(by_key[0], ("s1".to_string(), Some(2)));
     assert_eq!(by_key[1], ("s2".to_string(), Some(4)));
+}
+
+/// reqwest::Error's Display renders the full url, and that string reaches both the
+/// error! line and the probe that `/ready` serves unauthenticated.
+#[tokio::test]
+async fn pull_transport_error_does_not_expose_the_url() {
+    // port 1 is closed, which produces the transport error variant that carries the url
+    let config = build_pull_config(
+        "http://127.0.0.1:1/siem/v1/events?api_key=SUPERSECRET",
+        "url-privacy",
+    );
+    let ctx = build_ctx(config);
+
+    run_for(ctx.clone(), 2).await;
+
+    let err = ctx
+        .pull_probe
+        .as_ref()
+        .unwrap()
+        .last_error()
+        .expect("a refused connection must be recorded on the probe");
+
+    assert!(
+        err.starts_with("pull request failed"),
+        "expected the transport error path, got: {}",
+        err
+    );
+    assert!(
+        !err.contains("SUPERSECRET"),
+        "query-string secret reached the probe error: {}",
+        err
+    );
+    assert!(
+        !err.contains("127.0.0.1:1") && !err.contains("siem/v1/events"),
+        "pull url reached the probe error: {}",
+        err
+    );
 }

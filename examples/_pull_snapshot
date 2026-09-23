@@ -4,7 +4,11 @@
 # every request, with no cursor to resume from. Deduplication does the work instead.
 
 # Zabbix (JSON-RPC, so it needs a request body and therefore POST)
-ilagent daemon -v -v \
+
+# The auth value is passed by environment rather than by flag, so the token does not show
+# up in the process list, and inline rather than exported so it does not linger in the
+# rest of the shell session. --pull_auth header is what makes it get sent.
+ILERT_PULL_AUTH_VALUE='Bearer <zabbix api token>' ilagent daemon -v -v \
     --pull_url http://zabbix.internal/api_jsonrpc.php \
     --pull_name zabbix-problems \
     --pull_interval 60 \
@@ -21,7 +25,7 @@ ilagent daemon -v -v \
 # --pull_dedup_key is mandatory here: `since` bounds are inclusive, so the newest
 # records come back on every poll.
 #
-# ilagent daemon -v -v \
+# ILERT_PULL_AUTH_VALUE='<api key>' ilagent daemon -v -v \
 #     --pull_url https://monitoring.internal/api/alerts \
 #     --pull_name internal-monitoring \
 #     --pull_auth header --pull_auth_header X-API-Key \
