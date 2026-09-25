@@ -25,6 +25,10 @@ pub const MAX_CONSECUTIVE_PAGES: u32 = 10;
 /// Skip a fetch while this many events are queued; poll.rs drains slower than we fetch.
 pub const QUEUE_BACKPRESSURE_THRESHOLD: i64 = 5000;
 
+/// Upper bound for --pull_initial_lookback; far past any vendor's retention, and it keeps
+/// the seed computation in run_cycle clear of i64 overflow.
+pub const MAX_INITIAL_LOOKBACK_SECS: u64 = 31_536_000; // 365 days
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CursorMode {
     None,
@@ -201,6 +205,13 @@ pub fn validate_pull_config(config: &ILConfig) {
 
     if config.pull_interval < 10 || config.pull_interval > 3600 {
         panic!("--pull_interval must be between 10 and 3600 seconds");
+    }
+
+    if config.pull_initial_lookback > MAX_INITIAL_LOOKBACK_SECS {
+        panic!(
+            "--pull_initial_lookback must be at most {} seconds (365 days)",
+            MAX_INITIAL_LOOKBACK_SECS
+        );
     }
 
     if let Some(ref body) = config.pull_body
@@ -1097,6 +1108,22 @@ mod tests {
     fn validate_rejects_out_of_range_interval() {
         let mut config = base_config();
         config.pull_interval = 5;
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    #[should_panic(expected = "--pull_initial_lookback must be at most")]
+    fn validate_rejects_overflowing_lookback() {
+        // Scaled to millis this wraps i64 and would seed a garbage cursor.
+        let mut config = base_config();
+        config.pull_initial_lookback = u64::MAX;
+        validate_pull_config(&config);
+    }
+
+    #[test]
+    fn validate_accepts_lookback_at_the_limit() {
+        let mut config = base_config();
+        config.pull_initial_lookback = MAX_INITIAL_LOOKBACK_SECS;
         validate_pull_config(&config);
     }
 

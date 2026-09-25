@@ -345,7 +345,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("pull_initial_lookback")
             .long("pull_initial_lookback")
             .value_name("SECONDS")
-            .help("Timestamp mode: how far back to reach on the first run (default: 3600)"))
+            .help("Timestamp mode: how far back to reach on the first run (default: 3600, max 31536000)"))
         .arg(Arg::new("pull_dedup_key")
             .long("pull_dedup_key")
             .value_name("PATH")
@@ -536,8 +536,13 @@ const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buff
 
 // Repeatable (ArgAction::Append) consumer args — get_one would miss these, so they
 // need a get_many presence check in the edge-mode rejection loop.
-const EDGE_REJECTED_MULTI_ARGS: &[&str] =
-    &["label", "map_key_label", "service", "map_val_severity", "pull_header"];
+const EDGE_REJECTED_MULTI_ARGS: &[&str] = &[
+    "label",
+    "map_key_label",
+    "service",
+    "map_val_severity",
+    "pull_header",
+];
 
 pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
@@ -555,10 +560,7 @@ pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) ->
     build_normal_daemon_config(matches, config)
 }
 
-fn build_edge_daemon_config(
-    matches: &ArgMatches,
-    mut config: ILConfig,
-) -> ILConfig {
+fn build_edge_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
     let edge_key = std::env::var("ILERT_EDGE_CONNECTOR_KEY")
         .expect("ILERT_EDGE_CONNECTOR_KEY env var is required for edge connector mode");
 
@@ -828,8 +830,12 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
 
 pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
     config.pull_url = matches.get_one::<String>("pull_url").map(|s| s.to_string());
-    config.pull_name = matches.get_one::<String>("pull_name").map(|s| s.to_string());
-    config.pull_body = matches.get_one::<String>("pull_body").map(|s| s.to_string());
+    config.pull_name = matches
+        .get_one::<String>("pull_name")
+        .map(|s| s.to_string());
+    config.pull_body = matches
+        .get_one::<String>("pull_body")
+        .map(|s| s.to_string());
     config.pull_items_path = matches
         .get_one::<String>("pull_items_path")
         .map(|s| s.to_string());
@@ -848,7 +854,9 @@ pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
             .expect("Failed to parse pull_interval as integer");
     }
 
-    config.pull_auth = matches.get_one::<String>("pull_auth").map(|s| s.to_string());
+    config.pull_auth = matches
+        .get_one::<String>("pull_auth")
+        .map(|s| s.to_string());
 
     // Read only for the selected mode: an ambient leftover must not look like a
     // deliberately supplied credential to the mismatch check in validate_pull_config.
@@ -1245,7 +1253,9 @@ async fn run_edge_daemon(config: &ILConfig, db: ILDatabase, ilert_client: ILert)
 
         daemon_ctx.running.store(false, Ordering::Relaxed);
     } else {
-        edge_handle.await.expect("Failed to join edge connector thread");
+        edge_handle
+            .await
+            .expect("Failed to join edge connector thread");
         debug!("edge connector ended");
     }
 

@@ -446,11 +446,7 @@ impl ILDatabase {
         Ok(created)
     }
 
-    pub fn pull_dedup_seen(
-        &self,
-        source: &str,
-        dedup_key: &str,
-    ) -> Result<bool, rusqlite::Error> {
+    pub fn pull_dedup_seen(&self, source: &str, dedup_key: &str) -> Result<bool, rusqlite::Error> {
         // Refresh seen_at so records the source keeps returning outlive the sweep TTL.
         let updated = self.conn.execute(
             "UPDATE pull_dedup SET seen_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') WHERE source = ?1 AND dedup_key = ?2",

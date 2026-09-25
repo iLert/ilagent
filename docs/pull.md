@@ -139,7 +139,7 @@ The high-water mark is computed from the records themselves:
 
 `--pull_cursor_format` is `epoch_s`, `epoch_ms` or `iso8601`, and covers both reading the
 field and writing it back. `--pull_initial_lookback` seeds the first run, since there is
-nothing stored to resume from.
+nothing stored to resume from (default 3600 seconds, at most 365 days).
 
 **The API must filter on the cursor field and return the oldest records first.** The
 cursor is the newest timestamp on a page, so when records come back newest-first and
