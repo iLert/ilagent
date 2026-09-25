@@ -1,0 +1,48 @@
+#!/bin/bash
+
+# Snapshot sources: on-prem systems that return the current set of open problems on
+# every request, with no cursor to resume from. Deduplication does the work instead.
+
+# Zabbix (JSON-RPC, so it needs a request body and therefore POST)
+
+# The auth value is passed by environment rather than by flag, so the token does not show
+# up in the process list, and inline rather than exported so it does not linger in the
+# rest of the shell session. --pull_auth header is what makes it get sent.
+ILERT_PULL_AUTH_VALUE='Bearer <zabbix api token>' ilagent daemon -v -v \
+    --pull_url http://zabbix.internal/api_jsonrpc.php \
+    --pull_name zabbix-problems \
+    --pull_interval 60 \
+    --pull_body '{"jsonrpc":"2.0","method":"problem.get","params":{"output":"extend"},"id":1}' \
+    --pull_auth header --pull_auth_header Authorization \
+    --pull_items_path result \
+    --pull_cursor_mode none \
+    --pull_dedup_key eventid \
+    --event_key 'il1api...' \
+    --map_key_summary name \
+    --map_key_alert_key eventid
+
+# A plain REST API with a timestamp cursor.
+# --pull_dedup_key is mandatory here: `since` bounds are inclusive, so the newest
+# records come back on every poll.
+#
+# ILERT_PULL_AUTH_VALUE='<api key>' ilagent daemon -v -v \
+#     --pull_url https://monitoring.internal/api/alerts \
+#     --pull_name internal-monitoring \
+#     --pull_auth header --pull_auth_header X-API-Key \
+#     --pull_items_path data \
+#     --pull_cursor_mode timestamp \
+#     --pull_cursor_path updated_at \
+#     --pull_cursor_param since \
+#     --pull_cursor_format iso8601 \
+#     --pull_initial_lookback 7200 \
+#     --pull_dedup_key id \
+#     --event_key 'il1api...'
+
+# An API that returns a bare array needs no --pull_items_path at all.
+#
+# ilagent daemon -v -v \
+#     --pull_url https://alerts.internal/open \
+#     --pull_name internal-open \
+#     --pull_cursor_mode none \
+#     --pull_dedup_key id \
+#     --event_key 'il1api...'

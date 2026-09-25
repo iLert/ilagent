@@ -1,5 +1,29 @@
 # ilagent CHANGELOG
 
+## 2026-09-23, Version 0.12.0
+
+* added **pull connector** (`--pull_url`) — a new consumer that polls an HTTP endpoint on a timer and maps each returned record to an ilert event, for systems that offer no webhooks (Sophos Central, Zabbix, Icinga, or any REST API returning a list of alerts). Records go through the same mapping, filtering and enrichment as the MQTT and Kafka consumers and land in the same SQLite queue, keeping retry, backoff and offline buffering
+* `--pull_name` is required and keys the source's persisted cursor and dedup state, so several agents can share one database file
+* pull authentication modes (`--pull_auth`): `none`, `header` (`--pull_auth_header`, `--pull_auth_value`), `basic` (`--pull_username`, `--pull_password`) and `oauth2` client-credentials (`--pull_token_url`, `--pull_client_id`, `--pull_client_secret`, `--pull_scope`) — the token is cached, refreshed two minutes before expiry, and re-fetched once on a 401
+* pull credentials are validated against the selected `--pull_auth` mode in both directions — a credential passed without its mode, or belonging to a mode other than the one selected, is rejected at startup instead of being dropped and sending every request unauthenticated
+* every pull secret has an environment variable fallback (`ILERT_PULL_AUTH_VALUE`, `ILERT_PULL_PASSWORD`, `ILERT_PULL_CLIENT_SECRET`) to avoid exposing it in process listings; each is read only for the auth mode it belongs to, so an unrelated variable left in the environment is ignored rather than picked up
+* the pull url is never logged — it routinely carries a key or token in its query string; log lines identify the source by `--pull_name` instead, and the url is stripped from HTTP error messages, which are otherwise rendered with it in full and are served as the `error` field of `/ready`
+* a malformed `--pull_header` is reported by its leading name only — the usual mistake is a `:` where a `=` belongs (`Authorization: Bearer <token>`), which would otherwise log the credential
+* a token cursor configured without `--pull_dedup_key` warns at startup: an API whose cursor only pages through a result set leaves the stored cursor pinned to the last page, which is then re-fetched on every poll
+* three ways to resume between polls (`--pull_cursor_mode`): `none` (snapshot, paired with `--pull_dedup_key`), `token` (`--pull_cursor_path`, `--pull_cursor_param`) and `timestamp` (`--pull_cursor_format`, `--pull_initial_lookback`, at most 365 days) — the cursor is persisted only once every record on a page has been committed, so a partial failure re-fetches that page instead of skipping it
+* `--pull_dedup_key` records a stable per-record id, written in the same transaction as the queued event; a marker is swept seven days after the source last returned that record
+* the timestamp cursor never moves backwards — a page older than the stored cursor is delivered but leaves the cursor in place with a warning; the source must return records oldest-first, see docs/pull.md
+* pull requests follow redirects only within the same origin, so a credential in a custom header (or the oauth2 client secret on a 307/308) never follows a redirect to another host; any other redirect fails the cycle
+* epoch timestamps a source sends that are out of range are skipped rather than overflowing into the cursor
+* `--pull_items_path`, `--pull_cursor_path` and `--pull_dedup_key` prefer an exact key match before reading dots as nesting, so vendor keys that contain a dot (`@odata.count`) resolve correctly
+* `--pull_body` implies POST for JSON-RPC style endpoints, and is rejected in combination with the `token` and `timestamp` cursor modes because the cursor travels as a query parameter
+* `--pull_header` (repeatable) sends static headers on every pull request, `--pull_interval` sets the cycle gap (default 60, range 10–3600), `--pull_items_path` locates the record array
+* pull cycles back off exponentially on failure (5s base, capped at 300s), page up to 10 times per cycle, and skip a cycle entirely while 5000 events are already queued for delivery
+* readiness endpoint (`/ready`) reports pull connector health when `--port` is used alongside `--pull_url`
+* pull arguments are rejected when combined with edge connector mode (`--edge_mode`)
+* added `--map_val_severity value=N` (repeatable) to translate a vendor's severity words into ilert's 1–5 scale, e.g. `--map_val_severity high=2` — matching is case-insensitive, a value the map does not cover falls through to the existing numeric parse, and malformed mappings fail at startup. Applies to the MQTT and Kafka consumers as well as pull
+* **BREAKING** consumer payloads whose `severity` field is not a number no longer fail to deserialize. Previously an event carrying `"severity": "high"` was dropped in its entirety before any mapping ran; it now flows through with no severity set, or with the severity that `--map_key_severity` / `--map_val_severity` resolve. MQTT and Kafka users whose sources send severity as a word will see events that were silently discarded before — expect a step change in event volume on upgrade, and configure `--map_val_severity` to classify them
+
 ## 2026-06-11, Version 0.11.0
 
 * added support for four additional ilert event fields — `labels`, `severity`, `routingKey`, and `services` — wired end-to-end through the MQTT/Kafka consumers and the HTTP `POST /api/events` endpoint

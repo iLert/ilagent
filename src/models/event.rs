@@ -25,6 +25,22 @@ pub struct EventQueueItemJson {
     pub services: Option<Vec<EventServiceRef>>,
 }
 
+/// A vendor severity is often a word, which a strict `Option<i32>` would reject before
+/// map_key_severity ever ran. Unparseable lands as None and is resolved from the raw
+/// JSON afterwards. Only this transition struct is lenient; the HTTP endpoint stays
+/// strict and keeps returning 400.
+fn deserialize_lenient_severity<'de, D>(deserializer: D) -> Result<Option<i32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = <Option<serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(serde_json::Value::Number(n)) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
+        Some(serde_json::Value::String(s)) => s.trim().parse::<i32>().ok(),
+        _ => None,
+    })
+}
+
 /**
 helper to apply additional consumer mappings easier
 */
@@ -42,6 +58,7 @@ pub struct EventQueueTransitionItemJson {
     pub links: Option<Vec<EventLink>>,
     pub customDetails: Option<serde_json::Value>,
     pub labels: Option<HashMap<String, String>>,
+    #[serde(default, deserialize_with = "deserialize_lenient_severity")]
     pub severity: Option<i32>,
     pub routingKey: Option<String>,
     pub services: Option<Vec<EventServiceRef>>,
@@ -362,10 +379,29 @@ impl EventQueueItemJson {
         // severity rather than falling back to the payload-native value
         if let Some(ref map_key_severity) = config.map_key_severity {
             if let Some(val) = get_nested_value(&json, map_key_severity) {
-                let extracted = match val {
-                    serde_json::Value::Number(n) => n.as_i64(),
-                    serde_json::Value::String(s) => s.parse::<i64>().ok(),
+                // Case-insensitive; an uncovered value falls through to the numeric
+                // parse, so sources already sending 1-5 are unaffected.
+                let mapped = match val {
+                    serde_json::Value::String(s) if !config.map_val_severity.is_empty() => {
+                        config.map_val_severity.iter().find_map(|token| {
+                            let (name, level) = token.split_once('=')?;
+                            if name.trim().eq_ignore_ascii_case(s.trim()) {
+                                level.trim().parse::<i64>().ok()
+                            } else {
+                                None
+                            }
+                        })
+                    }
                     _ => None,
+                };
+
+                let extracted = match mapped {
+                    Some(n) => Some(n),
+                    None => match val {
+                        serde_json::Value::Number(n) => n.as_i64(),
+                        serde_json::Value::String(s) => s.parse::<i64>().ok(),
+                        _ => None,
+                    },
                 };
                 match extracted {
                     Some(n) if (1..=5).contains(&n) => parsed.severity = Some(n as i32),

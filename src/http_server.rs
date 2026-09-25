@@ -78,6 +78,18 @@ async fn get_ready(
         }
     }
 
+    if let Some(ref probe) = ctx.pull_probe {
+        if !probe.is_ready() {
+            let error = probe.last_error().unwrap_or_default();
+            let polling = probe.polling.load(Ordering::Relaxed);
+            return HttpResponse::ServiceUnavailable().json(json!({
+                "component": "pull",
+                "polling": polling,
+                "error": error,
+            }));
+        }
+    }
+
     HttpResponse::NoContent().finish()
 }
 

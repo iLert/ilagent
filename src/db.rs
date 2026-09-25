@@ -18,6 +18,7 @@ const DB_MIGRATION_V6: &str = "mig_6";
 const DB_MIGRATION_V7: &str = "mig_7";
 const DB_MIGRATION_V8: &str = "mig_8";
 const DB_MIGRATION_V9: &str = "mig_9";
+const DB_MIGRATION_V10: &str = "mig_10";
 
 #[derive(Debug)]
 struct ILAgentItem {
@@ -195,6 +196,32 @@ impl ILDatabase {
             self.set_il_val(DB_MIGRATION_V9, DB_MIGRATION_VAL)
                 .expect("Database migration failed (v9, set)");
             info!("Database migrated to {}", DB_MIGRATION_V9);
+        }
+
+        let mig_10 = self.get_il_value(DB_MIGRATION_V10);
+        if mig_10.is_none() {
+            self.conn
+                .execute(
+                    "CREATE TABLE pull_dedup (
+                      source             TEXT NOT NULL,
+                      dedup_key          TEXT NOT NULL,
+                      seen_at            DATETIME DEFAULT(STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')),
+                      PRIMARY KEY (source, dedup_key)
+                  )",
+                    [],
+                )
+                .expect("Database migration failed (v10, 1)");
+
+            self.conn
+                .execute(
+                    "CREATE INDEX idx_pull_dedup_seen_at ON pull_dedup (seen_at)",
+                    [],
+                )
+                .expect("Database migration failed (v10, 2)");
+
+            self.set_il_val(DB_MIGRATION_V10, DB_MIGRATION_VAL)
+                .expect("Database migration failed (v10, set)");
+            info!("Database migrated to {}", DB_MIGRATION_V10);
         }
 
         /*
@@ -391,6 +418,55 @@ impl ILDatabase {
     pub fn delete_il_event(&self, id: &str) -> Result<usize, rusqlite::Error> {
         self.conn
             .execute("DELETE FROM event_items WHERE id = ?1", &[&id])
+    }
+
+    /// Insert an event and its dedup marker in one transaction. A marker committed
+    /// without its event would suppress that record forever while it was never sent.
+    pub fn create_il_event_deduped(
+        &self,
+        item: &EventQueueItem,
+        source: &str,
+        dedup_key: Option<&str>,
+    ) -> Result<Option<EventQueueItem>, rusqlite::Error> {
+        let tx = self.conn.unchecked_transaction()?;
+        let created = self.create_il_event(item)?;
+
+        // Cannot confirm the event is queued, so roll back; the caller retries on None.
+        if created.is_none() {
+            return Ok(None);
+        }
+
+        if let Some(key) = dedup_key {
+            self.conn.execute(
+                "INSERT OR REPLACE INTO pull_dedup (source, dedup_key) VALUES (?1, ?2)",
+                &[&source as &dyn ToSql, &key],
+            )?;
+        }
+        tx.commit()?;
+        Ok(created)
+    }
+
+    pub fn pull_dedup_seen(&self, source: &str, dedup_key: &str) -> Result<bool, rusqlite::Error> {
+        // Refresh seen_at so records the source keeps returning outlive the sweep TTL.
+        let updated = self.conn.execute(
+            "UPDATE pull_dedup SET seen_at = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW') WHERE source = ?1 AND dedup_key = ?2",
+            &[&source as &dyn ToSql, &dedup_key],
+        )?;
+        Ok(updated > 0)
+    }
+
+    /// Drop dedup markers older than `ttl_secs` to bound table growth.
+    pub fn pull_dedup_sweep(&self, ttl_secs: i64) -> Result<usize, rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM pull_dedup WHERE seen_at < STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW', ?1)",
+            &[&format!("-{} seconds", ttl_secs)],
+        )
+    }
+
+    /// Queue depth, used by the pull connector for backpressure.
+    pub fn count_il_events(&self) -> Result<i64, rusqlite::Error> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM event_items", [], |row| row.get(0))
     }
 
     pub fn create_mqtt_queue_item(

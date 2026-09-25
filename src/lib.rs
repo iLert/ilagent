@@ -139,6 +139,45 @@ impl EdgeConnectorProbeState {
     }
 }
 
+pub struct PullProbeState {
+    pub polling: AtomicBool,
+    pub items_fetched: std::sync::atomic::AtomicU64,
+    /// Passes through the pull loop, whether they fetched, failed or were skipped.
+    pub cycles: std::sync::atomic::AtomicU64,
+    pub last_error: std::sync::Mutex<Option<String>>,
+}
+
+impl PullProbeState {
+    pub fn new() -> Self {
+        Self {
+            polling: AtomicBool::new(false),
+            items_fetched: std::sync::atomic::AtomicU64::new(0),
+            cycles: std::sync::atomic::AtomicU64::new(0),
+            last_error: std::sync::Mutex::new(None),
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.polling.load(Ordering::Relaxed) && self.last_error().is_none()
+    }
+
+    pub fn record_error(&self, error: String) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = Some(error);
+        }
+    }
+
+    pub fn clear_error(&self) {
+        if let Ok(mut last_error) = self.last_error.lock() {
+            *last_error = None;
+        }
+    }
+
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|e| e.clone())
+    }
+}
+
 pub struct DaemonContext {
     pub config: config::ILConfig,
     pub db: Mutex<db::ILDatabase>,
@@ -147,4 +186,15 @@ pub struct DaemonContext {
     pub mqtt_probe: Option<MqttProbeState>,
     pub kafka_probe: Option<KafkaProbeState>,
     pub edge_connector_probe: Option<EdgeConnectorProbeState>,
+    pub pull_probe: Option<PullProbeState>,
+}
+
+/// Sleep in 1s steps so a shutdown is not blocked for the whole interval.
+pub async fn interruptible_sleep(ctx: &std::sync::Arc<DaemonContext>, secs: u64) {
+    for _ in 0..secs {
+        if !ctx.running.load(Ordering::Relaxed) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 }
