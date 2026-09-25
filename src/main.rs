@@ -332,7 +332,7 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("pull_cursor_path")
             .long("pull_cursor_path")
             .value_name("PATH")
-            .help("token/url: JSON path in the response to the cursor. timestamp: path within each record"))
+            .help("token: JSON path in the response to the next cursor. timestamp: path within each record"))
         .arg(Arg::new("pull_cursor_param")
             .long("pull_cursor_param")
             .value_name("PARAM")

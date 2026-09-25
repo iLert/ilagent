@@ -13,6 +13,8 @@ const REQUEST_TIMEOUT_SECS: u64 = 30;
 const BACKOFF_BASE_SECS: u64 = 5;
 const BACKOFF_MAX_SECS: u64 = 300;
 const OAUTH_REFRESH_MARGIN_SECS: u64 = 120;
+/// Same as reqwest's default limit, which the same-origin policy replaces.
+const MAX_REDIRECTS: usize = 10;
 
 /// Dedup markers older than this are swept; a record reappearing after that is re-sent.
 pub const DEDUP_TTL_SECS: i64 = 604800; // 7 days
@@ -136,11 +138,13 @@ pub fn extract_items(body: &Value, items_path: Option<&str>) -> Vec<Value> {
     }
 }
 
+/// Values come straight from the vendor response, so anything outside what chrono can
+/// represent is rejected here; render_timestamp would otherwise turn it into an empty cursor.
 pub fn parse_timestamp(val: &Value, format: TimestampFormat) -> Option<i64> {
-    match format {
+    let millis = match format {
         TimestampFormat::EpochS => match val {
-            Value::Number(n) => n.as_i64().map(|s| s * 1000),
-            Value::String(s) => s.parse::<i64>().ok().map(|s| s * 1000),
+            Value::Number(n) => n.as_i64().and_then(|s| s.checked_mul(1000)),
+            Value::String(s) => s.parse::<i64>().ok().and_then(|s| s.checked_mul(1000)),
             _ => None,
         },
         TimestampFormat::EpochMs => match val {
@@ -153,7 +157,8 @@ pub fn parse_timestamp(val: &Value, format: TimestampFormat) -> Option<i64> {
                 .ok()
                 .map(|dt| dt.timestamp_millis())
         }),
-    }
+    };
+    millis.filter(|ms| chrono::DateTime::from_timestamp_millis(*ms).is_some())
 }
 
 pub fn render_timestamp(millis: i64, format: TimestampFormat) -> String {
@@ -198,10 +203,10 @@ pub fn validate_pull_config(config: &ILConfig) {
         panic!("--pull_interval must be between 10 and 3600 seconds");
     }
 
-    if let Some(ref body) = config.pull_body {
-        if serde_json::from_str::<Value>(body).is_err() {
-            panic!("--pull_body must be valid JSON");
-        }
+    if let Some(ref body) = config.pull_body
+        && serde_json::from_str::<Value>(body).is_err()
+    {
+        panic!("--pull_body must be valid JSON");
     }
 
     if config.event_key.is_none() {
@@ -454,10 +459,10 @@ async fn fetch_page(
         _ => {}
     }
 
-    if matches!(mode, CursorMode::Token | CursorMode::Timestamp) {
-        if let (Some(param), Some(value)) = (&config.pull_cursor_param, cursor) {
-            request = request.query(&[(param.as_str(), value)]);
-        }
+    if matches!(mode, CursorMode::Token | CursorMode::Timestamp)
+        && let (Some(param), Some(value)) = (&config.pull_cursor_param, cursor)
+    {
+        request = request.query(&[(param.as_str(), value)]);
     }
 
     let response = request
@@ -469,6 +474,13 @@ async fn fetch_page(
     let status = response.status();
     if status.as_u16() == 401 {
         return Err(PullError::Unauthorized);
+    }
+    if status.is_redirection() {
+        // The Location is not included: it is as likely to carry a key as the pull url.
+        return Err(PullError::Other(format!(
+            "pull request returned redirect status {} that was not followed — only same-origin redirects are, so credentials stay with the configured host; point --pull_url at the final location",
+            status
+        )));
     }
     if !status.is_success() {
         return Err(PullError::Other(format!(
@@ -640,7 +652,21 @@ async fn run_cycle(
                     );
                 }
 
-                max.map(|millis| render_timestamp(millis, format))
+                // An API that ignores `since`, or filters on a different field than the
+                // cursor path, can hand back a page older than the stored cursor.
+                let current = cursor
+                    .as_deref()
+                    .and_then(|c| parse_timestamp(&Value::String(c.to_string()), format));
+                match (max, current) {
+                    (Some(max), Some(current)) if max < current => {
+                        warn!(
+                            "Pull source '{}' returned records older than the stored cursor, keeping it — check that the API filters on --pull_cursor_param by the --pull_cursor_path field",
+                            source
+                        );
+                        None
+                    }
+                    _ => max.map(|millis| render_timestamp(millis, format)),
+                }
             }
             CursorMode::None => None,
         };
@@ -679,6 +705,23 @@ async fn run_cycle(
     Ok(enqueued)
 }
 
+/// reqwest strips only the standard auth headers on a cross-host redirect, so a key in
+/// `--pull_auth_header X-API-Key` or a `--pull_header` would follow it anywhere, and a
+/// 307/308 re-sends the oauth form body with the client secret.
+fn same_origin_redirects() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let same_origin = attempt
+            .previous()
+            .last()
+            .is_some_and(|prev| prev.origin() == attempt.url().origin());
+        if same_origin && attempt.previous().len() < MAX_REDIRECTS {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
 pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
     let source = ctx
         .config
@@ -691,6 +734,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .redirect(same_origin_redirects())
         .build()
         .expect("failed to create HTTP client for pull connector");
 
@@ -707,6 +751,12 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         source, interval, mode
     );
 
+    let cycle_done = || {
+        if let Some(ref probe) = ctx.pull_probe {
+            probe.cycles.fetch_add(1, Ordering::Relaxed);
+        }
+    };
+
     loop {
         if !ctx.running.load(Ordering::Relaxed) {
             break;
@@ -719,6 +769,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                 "Pull source '{}' skipping cycle, {} events still queued (threshold {})",
                 source, depth, QUEUE_BACKPRESSURE_THRESHOLD
             );
+            cycle_done();
             interruptible_sleep(&ctx, interval).await;
             continue;
         }
@@ -736,6 +787,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                     if let Some(ref probe) = ctx.pull_probe {
                         probe.record_error(e);
                     }
+                    cycle_done();
                     interruptible_sleep(&ctx, backoff).await;
                     continue;
                 }
@@ -787,10 +839,13 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                 if let Some(ref probe) = ctx.pull_probe {
                     probe.record_error(e.to_string());
                 }
+                cycle_done();
                 interruptible_sleep(&ctx, backoff).await;
                 continue;
             }
         }
+
+        cycle_done();
 
         interruptible_sleep(&ctx, interval).await;
     }
@@ -909,6 +964,46 @@ mod tests {
             None
         );
         assert_eq!(parse_timestamp(&json!(true), TimestampFormat::EpochS), None);
+    }
+
+    #[test]
+    fn timestamp_rejects_epoch_seconds_that_overflow_millis() {
+        // i64::MAX seconds panics in debug and wraps in release when scaled to millis.
+        for value in [
+            json!(i64::MAX),
+            json!(i64::MAX.to_string()),
+            json!(i64::MIN),
+        ] {
+            assert_eq!(
+                parse_timestamp(&value, TimestampFormat::EpochS),
+                None,
+                "{} must not parse",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn timestamp_rejects_millis_chrono_cannot_render() {
+        // Fits an i64 but lies past year 262143; rendered as iso8601 it used to become "".
+        let unrenderable = i64::MAX / 2;
+        assert_eq!(
+            parse_timestamp(&json!(unrenderable), TimestampFormat::EpochMs),
+            None
+        );
+        // epoch_s at the edge of i64 still fits after checked_mul, and must be caught too.
+        assert_eq!(
+            parse_timestamp(&json!(i64::MAX / 1000), TimestampFormat::EpochS),
+            None
+        );
+    }
+
+    #[test]
+    fn max_timestamp_ignores_an_overflowing_record() {
+        let items = vec![json!({"ts": 1_767_225_600}), json!({"ts": i64::MAX})];
+        let (max, distinct) = max_timestamp(&items, "ts", TimestampFormat::EpochS);
+        assert_eq!(max, Some(1_767_225_600_000));
+        assert_eq!(distinct, 1);
     }
 
     #[test]

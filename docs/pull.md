@@ -36,6 +36,11 @@ ilagent daemon -v -v \
 If it were computed from the URL, editing `?limit=1000` to `?limit=500` would orphan the
 stored cursor and every dedup row, silently replaying the whole lookback window.
 
+Redirects are followed only while they stay on the same origin (scheme, host and port).
+A redirect to anywhere else fails the cycle with the redirect status instead: an
+`--pull_auth_header` or `--pull_header` credential would otherwise go along with it, and
+so would the oauth2 client secret on a 307/308. Point `--pull_url` at the final location.
+
 ## Finding the records
 
 `--pull_items_path` points at the array inside the response:
@@ -136,6 +141,14 @@ The high-water mark is computed from the records themselves:
 field and writing it back. `--pull_initial_lookback` seeds the first run, since there is
 nothing stored to resume from.
 
+**The API must filter on the cursor field and return the oldest records first.** The
+cursor is the newest timestamp on a page, so when records come back newest-first and
+span several pages, the first page moves the cursor past everything the later pages
+hold, and those records are never fetched. The cursor never moves backwards: a page
+whose newest record is older than the stored cursor — an API that ignores `since`, or
+filters on a different field than `--pull_cursor_path` — is delivered but leaves the
+cursor where it was, with a warning.
+
 **`--pull_dedup_key` is required in this mode.** Most `since=` bounds are inclusive, so
 the newest records are returned again on the following poll. Dedup absorbs that.
 
@@ -147,8 +160,9 @@ but it cannot fix it. Use a different cursor mode for such a source.
 ## Deduplication
 
 `--pull_dedup_key` is a path to a stable unique id per record, resolved by the rule
-above. Keys are remembered for seven days, then swept; a record reappearing after that
-is delivered again.
+above. A key is remembered until seven days after the source last returned it, then
+swept; a record reappearing after that is delivered again. A snapshot source that keeps
+returning a record for longer therefore never re-sends it.
 
 The dedup marker and the queued event are written in a single transaction. A marker
 without its event would suppress that record forever while it was never delivered.
@@ -210,6 +224,12 @@ failed.
 - One pull source per agent. Run one agent per source; `--pull_name` keeps their state
   separate even when they share a database file.
 - No leader election. Two agents polling the same source both emit.
+- Consumer settings are shared by every consumer in one agent. Running `--pull_url`
+  alongside `--mqtt_host` or `--kafka_brokers` applies the `--event_key` the pull
+  connector requires to the MQTT or Kafka events as well, overriding the integration key
+  they carry, and the same goes for the `--map_key_*`, `--map_val_severity`, `--label`,
+  `--severity` and `--service` flags. Run the pull source in its own agent if they need
+  different settings.
 - `--pull_body` cannot be combined with `token` or `timestamp` cursor modes — the cursor
   travels as a query parameter, which a body-bearing endpoint would ignore. Rejected at
   startup rather than failing silently.
