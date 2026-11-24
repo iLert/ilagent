@@ -1,4 +1,6 @@
 use log::{debug, error, info, warn};
+use reqwest::header::{HeaderName, HeaderValue};
+use ring::digest;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -16,65 +18,29 @@ const OAUTH_REFRESH_MARGIN_SECS: u64 = 120;
 /// Same as reqwest's default limit, which the same-origin policy replaces.
 const MAX_REDIRECTS: usize = 10;
 
-/// Dedup markers older than this are swept; a record reappearing after that is re-sent.
-pub const DEDUP_TTL_SECS: i64 = 604800; // 7 days
-
 /// Pages per cycle, mirroring MAX_CONSECUTIVE_REPOLLS in the edge connector.
 pub const MAX_CONSECUTIVE_PAGES: u32 = 10;
 
-/// Skip a fetch while this many events are queued; poll.rs drains slower than we fetch.
+/// Stop fetching while this many events are queued; poll.rs drains slower than we fetch.
 pub const QUEUE_BACKPRESSURE_THRESHOLD: i64 = 5000;
 
-/// Upper bound for --pull_initial_lookback; far past any vendor's retention, and it keeps
-/// the seed computation in run_cycle clear of i64 overflow.
-pub const MAX_INITIAL_LOOKBACK_SECS: u64 = 31_536_000; // 365 days
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CursorMode {
-    None,
-    Token,
-    Timestamp,
-}
-
-impl CursorMode {
-    pub fn from_config(config: &ILConfig) -> CursorMode {
-        match config.pull_cursor_mode.as_deref() {
-            Some("token") => CursorMode::Token,
-            Some("timestamp") => CursorMode::Timestamp,
-            _ => CursorMode::None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimestampFormat {
-    EpochS,
-    EpochMs,
-    Iso8601,
-}
-
-impl TimestampFormat {
-    pub fn from_config(config: &ILConfig) -> TimestampFormat {
-        match config.pull_cursor_format.as_deref() {
-            Some("epoch_s") => TimestampFormat::EpochS,
-            Some("epoch_ms") => TimestampFormat::EpochMs,
-            _ => TimestampFormat::Iso8601,
-        }
-    }
-}
+/// A response (or oauth token response) larger than this fails the cycle.
+pub const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
 /// Unauthorized is its own variant so the oauth retry cannot be triggered by an
 /// unrelated error whose message happens to contain "401".
 #[derive(Debug)]
 pub enum PullError {
-    Unauthorized,
+    Unauthorized(u16),
     Other(String),
 }
 
 impl std::fmt::Display for PullError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PullError::Unauthorized => write!(f, "unauthorized (401) — check pull credentials"),
+            PullError::Unauthorized(status) => {
+                write!(f, "unauthorized ({}), check pull credentials", status)
+            }
             PullError::Other(msg) => write!(f, "{}", msg),
         }
     }
@@ -83,12 +49,6 @@ impl std::fmt::Display for PullError {
 impl From<String> for PullError {
     fn from(msg: String) -> Self {
         PullError::Other(msg)
-    }
-}
-
-impl From<&str> for PullError {
-    fn from(msg: &str) -> Self {
-        PullError::Other(msg.to_string())
     }
 }
 
@@ -103,8 +63,108 @@ impl OauthToken {
     }
 }
 
-pub fn cursor_db_key(name: &str) -> String {
-    format!("pull_cursor:{}", name)
+/// Request settings resolved once at startup.
+struct PullSource {
+    url: String,
+    headers: Vec<(HeaderName, HeaderValue)>,
+    items_path: Option<String>,
+    /// (response path, query param)
+    cursor: Option<(String, String)>,
+    cursor_key: String,
+    /// Host of the pull url, used in logs, summaries and default customDetails.
+    label: String,
+}
+
+impl PullSource {
+    fn from_config(config: &ILConfig) -> PullSource {
+        let url = config
+            .pull_url
+            .clone()
+            .expect("pull_url is required, validated at startup");
+        let headers = config
+            .pull_headers
+            .iter()
+            .map(|token| parse_header_flag(token).expect("validated at startup"))
+            .collect();
+        let cursor = match (&config.pull_cursor_path, &config.pull_cursor_param) {
+            (Some(path), Some(param)) => Some((path.clone(), param.clone())),
+            _ => None,
+        };
+        let cursor_key = cursor_db_key(config.event_key.as_deref().unwrap_or_default(), &url);
+        PullSource {
+            label: source_label(&url),
+            url,
+            headers,
+            items_path: config.pull_items_path.clone(),
+            cursor,
+            cursor_key,
+        }
+    }
+}
+
+/// `pull_cursor:<hash>` over the integration key and the url without its query string:
+/// editing `?limit=` keeps the cursor, another endpoint starts fresh instead of being sent
+/// a foreign cursor. Hashed like the edge connector's `edge_cursor:` key.
+pub fn cursor_db_key(event_key: &str, pull_url: &str) -> String {
+    let base = pull_url.split(['?', '#']).next().unwrap_or_default();
+    let input = format!("{}\n{}", event_key, base);
+    let hash = digest::digest(&digest::SHA256, input.as_bytes());
+    let hex: String = hash.as_ref().iter().map(|b| format!("{:02x}", b)).collect();
+    format!("pull_cursor:{}", &hex[..16])
+}
+
+/// The host only: the full url routinely carries a key in its query string.
+fn source_label(url: &str) -> String {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h.to_string()))
+        .unwrap_or_else(|| "pull".to_string())
+}
+
+/// `--pull_cursor PATH=PARAM`, both sides non-empty.
+pub fn parse_cursor_flag(token: &str) -> Option<(String, String)> {
+    let (path, param) = token.split_once('=')?;
+    let (path, param) = (path.trim(), param.trim());
+    if path.is_empty() || param.is_empty() {
+        return None;
+    }
+    Some((path.to_string(), param.to_string()))
+}
+
+/// `--pull_header KEY=VALUE`. Errors name only the leading header name: a ':' where a
+/// '=' belongs leaves a live credential in the remainder.
+pub fn parse_header_flag(token: &str) -> Result<(HeaderName, HeaderValue), String> {
+    let name_hint = || {
+        if token.contains([':', '=', ' ']) {
+            format!(
+                " starting '{}'",
+                token
+                    .split([':', '=', ' '])
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+            )
+        } else {
+            // No separator at all: the whole token may be the secret.
+            String::new()
+        }
+    };
+    let Some((key, value)) = token.split_once('=') else {
+        return Err(format!(
+            "--pull_header{} is malformed, expected KEY=VALUE",
+            name_hint()
+        ));
+    };
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("--pull_header has an empty name, expected KEY=VALUE".to_string());
+    }
+    let name = HeaderName::from_bytes(key.as_bytes())
+        .map_err(|_| format!("--pull_header{} has an invalid header name", name_hint()))?;
+    let mut value = HeaderValue::from_str(value)
+        .map_err(|_| format!("--pull_header '{}' has an invalid header value", key))?;
+    value.set_sensitive(true);
+    Ok((name, value))
 }
 
 /// Exact key match before dots are read as nesting, for vendor keys like `@odata.count`.
@@ -116,90 +176,68 @@ fn lookup_path<'a>(json: &'a Value, path: &str) -> Option<&'a Value> {
     get_nested_value(json, path)
 }
 
-/// Record array from a body; no path means the whole body, an object means one record.
-pub fn extract_items(body: &Value, items_path: Option<&str>) -> Vec<Value> {
+/// Record array from a body; no path means the whole body, an object means one record,
+/// an explicit null means no records. A missing path is an error so an API error body
+/// cannot pass as an empty poll; only key names are reported, never values.
+pub fn extract_items(body: &Value, items_path: Option<&str>) -> Result<Vec<Value>, String> {
     let target = match items_path {
         Some(path) => match lookup_path(body, path) {
             Some(val) => val,
             None => {
-                warn!("pull items path '{}' not found in response", path);
-                return Vec::new();
+                let keys = match body {
+                    Value::Object(map) => {
+                        let keys: Vec<&str> = map.keys().map(|k| k.as_str()).collect();
+                        format!("top-level keys: {}", keys.join(", "))
+                    }
+                    _ => "response is not an object".to_string(),
+                };
+                return Err(format!(
+                    "pull items path '{}' not found in response ({})",
+                    path, keys
+                ));
             }
         },
         None => body,
     };
 
     match target {
-        Value::Array(items) => items.clone(),
-        Value::Object(_) => vec![target.clone()],
-        other => {
-            warn!(
-                "pull items path resolved to a non-object value: {:?}, ignoring",
-                other
-            );
-            Vec::new()
-        }
+        Value::Array(items) => Ok(items.clone()),
+        Value::Object(_) => Ok(vec![target.clone()]),
+        Value::Null => Ok(Vec::new()),
+        _ => Err(format!(
+            "pull items path '{}' resolved to a value that is neither an array nor an object",
+            items_path.unwrap_or("<whole body>")
+        )),
     }
 }
 
-/// Values come straight from the vendor response, so anything outside what chrono can
-/// represent is rejected here; render_timestamp would otherwise turn it into an empty cursor.
-pub fn parse_timestamp(val: &Value, format: TimestampFormat) -> Option<i64> {
-    let millis = match format {
-        TimestampFormat::EpochS => match val {
-            Value::Number(n) => n.as_i64().and_then(|s| s.checked_mul(1000)),
-            Value::String(s) => s.parse::<i64>().ok().and_then(|s| s.checked_mul(1000)),
-            _ => None,
-        },
-        TimestampFormat::EpochMs => match val {
-            Value::Number(n) => n.as_i64(),
-            Value::String(s) => s.parse::<i64>().ok(),
-            _ => None,
-        },
-        TimestampFormat::Iso8601 => val.as_str().and_then(|s| {
-            chrono::DateTime::parse_from_rfc3339(s)
-                .ok()
-                .map(|dt| dt.timestamp_millis())
-        }),
-    };
-    millis.filter(|ms| chrono::DateTime::from_timestamp_millis(*ms).is_some())
-}
-
-pub fn render_timestamp(millis: i64, format: TimestampFormat) -> String {
-    match format {
-        TimestampFormat::EpochS => (millis / 1000).to_string(),
-        TimestampFormat::EpochMs => millis.to_string(),
-        TimestampFormat::Iso8601 => chrono::DateTime::from_timestamp_millis(millis)
-            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
-            .unwrap_or_default(),
+/// Next-page token from a response; an empty string counts as none.
+fn next_cursor(body: &Value, path: &str) -> Option<String> {
+    match lookup_path(body, path)? {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        _ => None,
     }
-}
-
-/// Highest timestamp on a page, plus distinct count — a page sharing one timestamp
-/// cannot advance an inclusive cursor.
-pub fn max_timestamp(items: &[Value], path: &str, format: TimestampFormat) -> (Option<i64>, usize) {
-    let mut seen: Vec<i64> = Vec::new();
-    for item in items {
-        if let Some(val) = lookup_path(item, path) {
-            if let Some(millis) = parse_timestamp(val, format) {
-                if !seen.contains(&millis) {
-                    seen.push(millis);
-                }
-            } else {
-                warn!(
-                    "pull cursor path '{}' matched an unparseable timestamp: {:?}",
-                    path, val
-                );
-            }
-        }
-    }
-    (seen.iter().copied().max(), seen.len())
 }
 
 pub fn validate_pull_config(config: &ILConfig) {
-    if config.pull_name.is_none() {
+    let Some(ref url) = config.pull_url else {
+        panic!("--pull_url is required for the pull connector");
+    };
+    // The url is not echoed: it may carry a key.
+    let Ok(parsed_url) = reqwest::Url::parse(url) else {
+        panic!("--pull_url is not a valid URL");
+    };
+
+    if config.event_key.is_none() {
         panic!(
-            "--pull_name is required for pull sources (it keys the stored cursor and dedup rows)"
+            "--event_key is required for the pull connector, vendor records carry no ilert integration key"
+        );
+    }
+
+    if config.map_key_alert_key.is_none() {
+        panic!(
+            "--map_key_alert_key is required for the pull connector, ilert deduplicates re-delivered records by alertKey and without it every poll opens new alerts"
         );
     }
 
@@ -207,172 +245,123 @@ pub fn validate_pull_config(config: &ILConfig) {
         panic!("--pull_interval must be between 10 and 3600 seconds");
     }
 
-    if config.pull_initial_lookback > MAX_INITIAL_LOOKBACK_SECS {
+    match (&config.pull_cursor_path, &config.pull_cursor_param) {
+        (Some(path), Some(param)) if !path.trim().is_empty() && !param.trim().is_empty() => {}
+        (None, None) => {
+            warn!(
+                "Pull connector has no --pull_cursor: every record is sent on every poll and ilert folds them by alertKey (snapshot polling). A record that disappears from the source does not resolve its alert."
+            );
+        }
+        _ => panic!("--pull_cursor must be PATH=PARAM (e.g. next_cursor=cursor)"),
+    }
+
+    for token in &config.pull_headers {
+        if let Err(e) = parse_header_flag(token) {
+            panic!("{}", e);
+        }
+    }
+
+    let uses_oauth = config.pull_oauth_url.is_some();
+    if let Some(ref oauth_url) = config.pull_oauth_url {
+        if reqwest::Url::parse(oauth_url).is_err() {
+            panic!("--pull_oauth_url is not a valid URL");
+        }
+        if config.pull_oauth_client_id.is_none() {
+            panic!("--pull_oauth_client_id is required with --pull_oauth_url");
+        }
+        if config.pull_oauth_secret.is_none() {
+            panic!("ILERT_PULL_OAUTH_SECRET env var is required with --pull_oauth_url");
+        }
+    } else if config.pull_oauth_client_id.is_some() || config.pull_oauth_scope.is_some() {
         panic!(
-            "--pull_initial_lookback must be at most {} seconds (365 days)",
-            MAX_INITIAL_LOOKBACK_SECS
+            "--pull_oauth_client_id and --pull_oauth_scope require --pull_oauth_url, without it no token is fetched and every request goes out unauthenticated"
         );
     }
 
-    if let Some(ref body) = config.pull_body
-        && serde_json::from_str::<Value>(body).is_err()
+    if uses_oauth || !config.pull_headers.is_empty() {
+        let plain_http = parsed_url.scheme() == "http"
+            || config
+                .pull_oauth_url
+                .as_deref()
+                .and_then(|u| reqwest::Url::parse(u).ok())
+                .is_some_and(|u| u.scheme() == "http");
+        if plain_http {
+            warn!(
+                "Pull connector sends credentials or static headers over plain http://, use https:// outside of local testing"
+            );
+        }
+    }
+}
+
+/// Vendor record to event through the configured mappings only, then the same
+/// customDetails defaulting and static enrichment the MQTT/Kafka consumers apply.
+pub fn prepare_vendor_event(
+    config: &ILConfig,
+    record: &Value,
+    source: &str,
+) -> Option<EventQueueItemJson> {
+    let mut event = EventQueueItemJson::from_vendor_record(config, record, source)?;
+    if event.customDetails.is_none() {
+        event.customDetails = Some(if config.forward_message_payload {
+            record.clone()
+        } else {
+            json!({ "source": source })
+        });
+    }
+    crate::consumers::enrich_event(config, &mut event);
+    Some(event)
+}
+
+/// Read a body in chunks, failing once it grows past `limit`.
+async fn read_body_limited(
+    mut response: reqwest::Response,
+    limit: usize,
+    what: &str,
+) -> Result<Value, String> {
+    let too_large = || format!("{} exceeds {} bytes", what, limit);
+    if response.content_length().is_some_and(|n| n > limit as u64) {
+        return Err(too_large());
+    }
+    let mut buf: Vec<u8> = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("failed to read {}: {}", what, e.without_url()))?
     {
-        panic!("--pull_body must be valid JSON");
-    }
-
-    if config.event_key.is_none() {
-        panic!(
-            "--event_key is required for pull sources — vendor payloads carry no ilert integration key, and events without one are rejected by the events API"
-        );
-    }
-
-    match config.pull_auth.as_deref() {
-        Some("header") => {
-            if config.pull_auth_header.is_none() {
-                panic!("--pull_auth_header is required when pull_auth is 'header'");
-            }
-            if config.pull_auth_value.is_none() {
-                panic!(
-                    "--pull_auth_value (or ILERT_PULL_AUTH_VALUE) is required when pull_auth is 'header'"
-                );
-            }
+        if buf.len() + chunk.len() > limit {
+            return Err(too_large());
         }
-        Some("basic") => {
-            if config.pull_username.is_none() {
-                panic!("--pull_username is required when pull_auth is 'basic'");
-            }
-            if config.pull_password.is_none() {
-                panic!(
-                    "--pull_password (or ILERT_PULL_PASSWORD) is required when pull_auth is 'basic'"
-                );
-            }
-        }
-        Some("oauth2") => {
-            if config.pull_token_url.is_none() {
-                panic!("--pull_token_url is required when pull_auth is 'oauth2'");
-            }
-            if config.pull_client_id.is_none() {
-                panic!("--pull_client_id is required when pull_auth is 'oauth2'");
-            }
-            if config.pull_client_secret.is_none() {
-                panic!(
-                    "--pull_client_secret (or ILERT_PULL_CLIENT_SECRET) is required when pull_auth is 'oauth2'"
-                );
-            }
-        }
-        Some("none") | None => {}
-        Some(other) => panic!(
-            "Unknown pull_auth '{}', expected: none, header, basic, oauth2",
-            other
-        ),
+        buf.extend_from_slice(&chunk);
     }
-
-    // fetch_page dispatches on pull_auth alone, so a credential without its mode is
-    // dropped and every request goes out unauthenticated.
-    let selected = config.pull_auth.as_deref().unwrap_or("none");
-    for (mode, flags) in [
-        (
-            "header",
-            vec![
-                ("--pull_auth_header", config.pull_auth_header.is_some()),
-                ("--pull_auth_value", config.pull_auth_value.is_some()),
-            ],
-        ),
-        (
-            "basic",
-            vec![
-                ("--pull_username", config.pull_username.is_some()),
-                ("--pull_password", config.pull_password.is_some()),
-            ],
-        ),
-        (
-            "oauth2",
-            vec![
-                ("--pull_token_url", config.pull_token_url.is_some()),
-                ("--pull_client_id", config.pull_client_id.is_some()),
-                ("--pull_client_secret", config.pull_client_secret.is_some()),
-                ("--pull_scope", config.pull_scope.is_some()),
-            ],
-        ),
-    ] {
-        if selected == mode {
-            continue;
-        }
-        for (flag, is_set) in flags {
-            if is_set {
-                panic!(
-                    "{} requires --pull_auth {}, but pull_auth is '{}' — the credential would be ignored and every request sent unauthenticated",
-                    flag, mode, selected
-                );
-            }
-        }
-    }
-
-    let mode = CursorMode::from_config(config);
-
-    match mode {
-        CursorMode::Token | CursorMode::Timestamp => {
-            if config.pull_cursor_path.is_none() {
-                panic!("--pull_cursor_path is required for this cursor mode");
-            }
-            if config.pull_cursor_param.is_none() {
-                panic!("--pull_cursor_param is required for this cursor mode");
-            }
-        }
-        CursorMode::None => {}
-    }
-
-    // The cursor is a query param, which a body-bearing endpoint ignores.
-    if config.pull_body.is_some() && matches!(mode, CursorMode::Token | CursorMode::Timestamp) {
-        panic!(
-            "--pull_body cannot be combined with pull_cursor_mode '{}' — the cursor is sent as a query parameter and a body-bearing endpoint would ignore it",
-            config.pull_cursor_mode.as_deref().unwrap_or("")
-        );
-    }
-
-    // Inclusive `since` semantics mean the boundary records return on every poll.
-    if mode == CursorMode::Timestamp && config.pull_dedup_key.is_none() {
-        panic!(
-            "--pull_dedup_key is required when pull_cursor_mode is 'timestamp' — timestamp boundaries are inclusive, so the newest records are re-delivered on every poll without it"
-        );
-    }
-
-    if mode == CursorMode::None && config.pull_dedup_key.is_none() {
-        warn!(
-            "Pull source has no cursor and no --pull_dedup_key: every record will be re-sent on every poll, relying entirely on ilert's alertKey deduplication"
-        );
-    }
-
-    // Only a warning: a durable watermark needs no dedup, a pagination handle does.
-    if mode == CursorMode::Token && config.pull_dedup_key.is_none() {
-        warn!(
-            "Pull source uses a token cursor without --pull_dedup_key: if this API's cursor only pages through a result set rather than marking a durable position, the last page will be re-sent on every poll"
-        );
-    }
+    serde_json::from_slice(&buf).map_err(|e| format!("failed to parse {} as json: {}", what, e))
 }
 
 async fn fetch_oauth_token(
     client: &reqwest::Client,
     config: &ILConfig,
 ) -> Result<OauthToken, String> {
-    let token_url = config.pull_token_url.as_ref().ok_or("missing token url")?;
-    let client_id = config.pull_client_id.as_ref().ok_or("missing client id")?;
-    let client_secret = config
-        .pull_client_secret
+    let token_url = config.pull_oauth_url.as_ref().ok_or("missing oauth url")?;
+    let client_id = config
+        .pull_oauth_client_id
         .as_ref()
-        .ok_or("missing client secret")?;
+        .ok_or("missing oauth client id")?;
+    let client_secret = config
+        .pull_oauth_secret
+        .as_ref()
+        .ok_or("missing oauth client secret")?;
 
     let mut form = vec![
         ("grant_type", "client_credentials"),
         ("client_id", client_id.as_str()),
         ("client_secret", client_secret.as_str()),
     ];
-    if let Some(ref scope) = config.pull_scope {
+    if let Some(ref scope) = config.pull_oauth_scope {
         form.push(("scope", scope.as_str()));
     }
 
     let response = client
         .post(token_url)
+        .header("User-Agent", crate::CALLER_AGENT)
         .form(&form)
         .send()
         .await
@@ -384,10 +373,7 @@ async fn fetch_oauth_token(
         return Err(format!("oauth token request returned status {}", status));
     }
 
-    let body: Value = response
-        .json()
-        .await
-        .map_err(|e| format!("failed to parse oauth token response: {}", e.without_url()))?;
+    let body = read_body_limited(response, MAX_RESPONSE_BYTES, "oauth token response").await?;
 
     let access_token = body
         .get("access_token")
@@ -410,69 +396,26 @@ async fn fetch_oauth_token(
     })
 }
 
-/// One HTTP request. `cursor` is already resolved to whatever should be sent this call.
+/// One HTTP request, with `cursor` sent as the configured query param when present.
 async fn fetch_page(
     client: &reqwest::Client,
-    config: &ILConfig,
-    mode: CursorMode,
+    source: &PullSource,
     cursor: Option<&str>,
     bearer: Option<&str>,
 ) -> Result<Value, PullError> {
-    let url = config.pull_url.as_ref().ok_or("pull_url is not set")?;
+    let mut request = client
+        .get(&source.url)
+        .header("User-Agent", crate::CALLER_AGENT);
 
-    let mut request = match config.pull_body {
-        Some(ref body) => client
-            .post(url)
-            .header("Content-Type", "application/json")
-            .body(body.clone()),
-        None => client.get(url),
-    };
-
-    request = request.header("User-Agent", crate::CALLER_AGENT);
-
-    for token in &config.pull_headers {
-        match token.split_once('=') {
-            Some((key, value)) if !key.trim().is_empty() => {
-                request = request.header(key.trim(), value);
-            }
-            _ => {
-                // Only the leading name is logged: a ':' where a '=' belongs leaves a
-                // live credential in the remainder.
-                let name = token
-                    .split([':', '=', ' '])
-                    .next()
-                    .unwrap_or_default()
-                    .trim();
-                warn!(
-                    "Ignoring malformed --pull_header starting '{}', expected key=value",
-                    name
-                );
-            }
-        }
+    for (name, value) in &source.headers {
+        request = request.header(name.clone(), value.clone());
     }
 
-    match config.pull_auth.as_deref() {
-        Some("header") => {
-            if let (Some(name), Some(value)) = (&config.pull_auth_header, &config.pull_auth_value) {
-                request = request.header(name.as_str(), value.as_str());
-            }
-        }
-        Some("basic") => {
-            if let Some(ref username) = config.pull_username {
-                request = request.basic_auth(username, config.pull_password.as_ref());
-            }
-        }
-        Some("oauth2") => {
-            if let Some(token) = bearer {
-                request = request.header("Authorization", format!("Bearer {}", token));
-            }
-        }
-        _ => {}
+    if let Some(token) = bearer {
+        request = request.bearer_auth(token);
     }
 
-    if matches!(mode, CursorMode::Token | CursorMode::Timestamp)
-        && let (Some(param), Some(value)) = (&config.pull_cursor_param, cursor)
-    {
+    if let (Some((_, param)), Some(value)) = (&source.cursor, cursor) {
         request = request.query(&[(param.as_str(), value)]);
     }
 
@@ -483,13 +426,13 @@ async fn fetch_page(
         .map_err(|e| PullError::Other(format!("pull request failed: {}", e.without_url())))?;
 
     let status = response.status();
-    if status.as_u16() == 401 {
-        return Err(PullError::Unauthorized);
+    if status.as_u16() == 401 || status.as_u16() == 403 {
+        return Err(PullError::Unauthorized(status.as_u16()));
     }
     if status.is_redirection() {
         // The Location is not included: it is as likely to carry a key as the pull url.
         return Err(PullError::Other(format!(
-            "pull request returned redirect status {} that was not followed — only same-origin redirects are, so credentials stay with the configured host; point --pull_url at the final location",
+            "pull request returned redirect status {} that was not followed, only same-origin redirects are so credentials stay with the configured host; point --pull_url at the final location",
             status
         )));
     }
@@ -500,42 +443,24 @@ async fn fetch_page(
         )));
     }
 
-    response.json::<Value>().await.map_err(|e| {
-        PullError::Other(format!(
-            "failed to parse pull response as json: {}",
-            e.without_url()
-        ))
-    })
+    Ok(read_body_limited(response, MAX_RESPONSE_BYTES, "pull response").await?)
 }
 
-/// Vendor record to event through the configured mappings only, then the same
-/// customDetails defaulting and static enrichment the MQTT/Kafka consumers apply.
-pub fn prepare_vendor_event(
-    config: &ILConfig,
-    record: &Value,
-    source: &str,
-) -> Option<EventQueueItemJson> {
-    let mut event = EventQueueItemJson::from_vendor_record(config, record, source)?;
-    if event.customDetails.is_none() {
-        event.customDetails = Some(if config.forward_message_payload {
-            record.clone()
-        } else {
-            json!({ "source": source })
-        });
-    }
-    crate::consumers::enrich_event(config, &mut event);
-    Some(event)
-}
-
-/// Enqueue one record. Returns true when it was inserted, false when deduped or filtered.
+/// Enqueue one record. Returns true when it was inserted, false when skipped or filtered.
 async fn enqueue_record(
     ctx: &Arc<DaemonContext>,
-    source: &str,
+    source: &PullSource,
     record: &Value,
 ) -> Result<bool, String> {
-    let config = &ctx.config;
+    if !record.is_object() {
+        warn!(
+            "Pull source '{}' returned a record that is not a JSON object, skipping",
+            source.label
+        );
+        return Ok(false);
+    }
 
-    let event = match prepare_vendor_event(config, record, source) {
+    let event = match prepare_vendor_event(&ctx.config, record, &source.label) {
         Some(event) => event,
         None => return Ok(false), // filtered, already logged
     };
@@ -543,14 +468,12 @@ async fn enqueue_record(
     // No typed api path: pull events post to plain /events, like the event subcommand.
     let db_event = EventQueueItemJson::to_db(event, None);
 
-    let result = ctx.db.lock().await.create_il_event(&db_event);
-
-    match result {
+    match ctx.db.lock().await.create_il_event(&db_event) {
         Ok(Some(val)) => {
-            info!(
+            debug!(
                 "Event {} from pull source '{}' added to queue",
                 val.id.clone().unwrap_or_default(),
-                source
+                source.label
             );
             Ok(true)
         }
@@ -559,51 +482,47 @@ async fn enqueue_record(
     }
 }
 
-/// Fetch and enqueue what is available, returning the count. An error leaves that page's
-/// cursor untouched so it is retried.
+async fn queue_depth(ctx: &Arc<DaemonContext>) -> i64 {
+    ctx.db.lock().await.count_il_events().unwrap_or(0)
+}
+
+/// Fetch and enqueue what is available, returning the count. A page's cursor is only
+/// persisted after all of its records are committed, so an error retries that page.
 async fn run_cycle(
     ctx: &Arc<DaemonContext>,
     client: &reqwest::Client,
-    source: &str,
-    mode: CursorMode,
+    source: &PullSource,
     bearer: Option<&str>,
 ) -> Result<u64, PullError> {
-    let config = &ctx.config;
-    let format = TimestampFormat::from_config(config);
-    let cursor_key = cursor_db_key(source);
-
-    let mut cursor: Option<String> = ctx.db.lock().await.get_il_value(&cursor_key);
-
-    // Nothing to resume from on a first run, and omitting the param is API-dependent.
-    if mode == CursorMode::Timestamp && cursor.is_none() {
-        let seed =
-            chrono::Utc::now().timestamp_millis() - (config.pull_initial_lookback as i64 * 1000);
-        cursor = Some(render_timestamp(seed, format));
-        info!(
-            "Pull source '{}' has no stored cursor, seeding {}s lookback: {}",
-            source,
-            config.pull_initial_lookback,
-            cursor.clone().unwrap_or_default()
-        );
-    }
+    let mut cursor: Option<String> = match source.cursor {
+        Some(_) => ctx.db.lock().await.get_il_value(&source.cursor_key),
+        None => None,
+    };
 
     let mut enqueued: u64 = 0;
     let mut pages: u32 = 0;
 
     loop {
+        // run_pull_job checked the first page; later pages re-check as the queue grows.
+        if pages > 0 {
+            let depth = queue_depth(ctx).await;
+            if depth >= QUEUE_BACKPRESSURE_THRESHOLD {
+                warn!(
+                    "Pull source '{}' stopped paging, {} events still queued (threshold {})",
+                    source.label, depth, QUEUE_BACKPRESSURE_THRESHOLD
+                );
+                break;
+            }
+        }
+
         pages += 1;
 
-        let body = fetch_page(client, config, mode, cursor.as_deref(), bearer).await?;
-        let items = extract_items(&body, config.pull_items_path.as_deref());
-
-        if items.is_empty() {
-            debug!("Pull source '{}' returned no records", source);
-            break;
-        }
+        let body = fetch_page(client, source, cursor.as_deref(), bearer).await?;
+        let items = extract_items(&body, source.items_path.as_deref())?;
 
         debug!(
             "Pull source '{}' page {} returned {} records",
-            source,
+            source.label,
             pages,
             items.len()
         );
@@ -614,66 +533,28 @@ async fn run_cycle(
             }
         }
 
-        if mode == CursorMode::None {
+        let Some((ref path, _)) = source.cursor else {
             break; // snapshot sources have no notion of a next page
-        }
-
-        let next = match mode {
-            CursorMode::Token => config
-                .pull_cursor_path
-                .as_ref()
-                .and_then(|path| lookup_path(&body, path))
-                .and_then(|val| match val {
-                    serde_json::Value::String(s) => Some(s.clone()),
-                    serde_json::Value::Number(n) => Some(n.to_string()),
-                    _ => None,
-                }),
-            CursorMode::Timestamp => {
-                let path = config.pull_cursor_path.as_deref().unwrap_or_default();
-                let (max, distinct) = max_timestamp(&items, path, format);
-
-                if distinct == 1 && items.len() > 1 {
-                    error!(
-                        "Pull source '{}' returned {} records all sharing one timestamp — this source's timestamp resolution is too coarse to cursor reliably, and records beyond this page may never be fetched. Consider a different cursor mode.",
-                        source,
-                        items.len()
-                    );
-                }
-
-                // An API that ignores `since`, or filters on a different field than the
-                // cursor path, can hand back a page older than the stored cursor.
-                let current = cursor
-                    .as_deref()
-                    .and_then(|c| parse_timestamp(&Value::String(c.to_string()), format));
-                match (max, current) {
-                    (Some(max), Some(current)) if max < current => {
-                        warn!(
-                            "Pull source '{}' returned records older than the stored cursor, keeping it — check that the API filters on --pull_cursor_param by the --pull_cursor_path field",
-                            source
-                        );
-                        None
-                    }
-                    _ => max.map(|millis| render_timestamp(millis, format)),
-                }
-            }
-            CursorMode::None => None,
         };
 
-        let Some(next) = next else {
+        // Read before the empty check: an empty page can still hand out a new cursor.
+        let Some(next) = next_cursor(&body, path) else {
             debug!(
                 "Pull source '{}' returned no next cursor, cycle done",
-                source
+                source.label
             );
             break;
         };
 
-        // Only advance once every record on the page is committed.
         if cursor.as_deref() == Some(next.as_str()) {
-            debug!("Pull source '{}' cursor unchanged, cycle done", source);
+            debug!(
+                "Pull source '{}' cursor unchanged, cycle done",
+                source.label
+            );
             break;
         }
 
-        if let Err(e) = ctx.db.lock().await.set_il_val(&cursor_key, &next) {
+        if let Err(e) = ctx.db.lock().await.set_il_val(&source.cursor_key, &next) {
             return Err(PullError::Other(format!(
                 "failed to persist pull cursor: {}",
                 e
@@ -681,10 +562,18 @@ async fn run_cycle(
         }
         cursor = Some(next);
 
+        if items.is_empty() {
+            debug!(
+                "Pull source '{}' returned an empty page, cycle done",
+                source.label
+            );
+            break;
+        }
+
         if pages >= MAX_CONSECUTIVE_PAGES {
             debug!(
                 "Pull source '{}' reached max consecutive pages ({}), pausing until next interval",
-                source, MAX_CONSECUTIVE_PAGES
+                source.label, MAX_CONSECUTIVE_PAGES
             );
             break;
         }
@@ -693,9 +582,9 @@ async fn run_cycle(
     Ok(enqueued)
 }
 
-/// reqwest strips only the standard auth headers on a cross-host redirect, so a key in
-/// `--pull_auth_header X-API-Key` or a `--pull_header` would follow it anywhere, and a
-/// 307/308 re-sends the oauth form body with the client secret.
+/// reqwest strips only the standard auth headers on a cross-host redirect, so a key in a
+/// `--pull_header` would follow it anywhere, and a 307/308 re-sends the oauth form body
+/// with the client secret.
 fn same_origin_redirects() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         let same_origin = attempt
@@ -711,14 +600,9 @@ fn same_origin_redirects() -> reqwest::redirect::Policy {
 }
 
 pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
-    let source = ctx
-        .config
-        .pull_name
-        .clone()
-        .expect("pull_name is required, validated at startup");
+    let source = PullSource::from_config(&ctx.config);
     let interval = ctx.config.pull_interval;
-    let mode = CursorMode::from_config(&ctx.config);
-    let uses_oauth = ctx.config.pull_auth.as_deref() == Some("oauth2");
+    let uses_oauth = ctx.config.pull_oauth_url.is_some();
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
@@ -735,8 +619,15 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
 
     // The url is not logged: it routinely carries a key or token in its query string.
     info!(
-        "Pull source '{}' polling every {}s (cursor: {:?})",
-        source, interval, mode
+        "Pull source '{}' polling every {}s (cursor: {}, oauth: {})",
+        source.label,
+        interval,
+        if source.cursor.is_some() {
+            "token"
+        } else {
+            "none"
+        },
+        uses_oauth
     );
 
     let cycle_done = || {
@@ -751,11 +642,11 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         }
 
         // Fetching while the queue is already deep only grows the backlog.
-        let depth = ctx.db.lock().await.count_il_events().unwrap_or(0);
+        let depth = queue_depth(&ctx).await;
         if depth >= QUEUE_BACKPRESSURE_THRESHOLD {
             warn!(
                 "Pull source '{}' skipping cycle, {} events still queued (threshold {})",
-                source, depth, QUEUE_BACKPRESSURE_THRESHOLD
+                source.label, depth, QUEUE_BACKPRESSURE_THRESHOLD
             );
             cycle_done();
             interruptible_sleep(&ctx, interval).await;
@@ -770,7 +661,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                     let backoff = backoff_secs(consecutive_failures);
                     error!(
                         "Pull source '{}' oauth failed (attempt {}, backoff {}s): {}",
-                        source, consecutive_failures, backoff, e
+                        source.label, consecutive_failures, backoff, e
                     );
                     if let Some(ref probe) = ctx.pull_probe {
                         probe.record_error(e);
@@ -783,20 +674,20 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         }
 
         let bearer = token.as_ref().map(|t| t.access_token.clone());
-        let mut result = run_cycle(&ctx, &client, &source, mode, bearer.as_deref()).await;
+        let mut result = run_cycle(&ctx, &client, &source, bearer.as_deref()).await;
 
         // A token can be revoked before its stated expiry; retry once with a fresh one.
-        if uses_oauth && matches!(&result, Err(PullError::Unauthorized)) {
+        if uses_oauth && let Err(PullError::Unauthorized(status)) = &result {
             info!(
-                "Pull source '{}' got 401, refreshing token and retrying",
-                source
+                "Pull source '{}' got {}, refreshing token and retrying",
+                source.label, status
             );
             token = None;
             match fetch_oauth_token(&client, &ctx.config).await {
                 Ok(fresh) => {
                     let bearer = fresh.access_token.clone();
                     token = Some(fresh);
-                    result = run_cycle(&ctx, &client, &source, mode, Some(&bearer)).await;
+                    result = run_cycle(&ctx, &client, &source, Some(&bearer)).await;
                 }
                 Err(e) => result = Err(PullError::Other(e)),
             }
@@ -807,10 +698,9 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                 consecutive_failures = 0;
                 if let Some(ref probe) = ctx.pull_probe {
                     probe.clear_error();
-                    probe.items_fetched.fetch_add(count, Ordering::Relaxed);
                 }
                 if count > 0 {
-                    info!("Pull source '{}' enqueued {} events", source, count);
+                    info!("Pull source '{}' enqueued {} events", source.label, count);
                 }
             }
             Err(e) => {
@@ -818,7 +708,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                 let backoff = backoff_secs(consecutive_failures);
                 error!(
                     "Pull source '{}' cycle failed (attempt {}, backoff {}s): {}",
-                    source, consecutive_failures, backoff, e
+                    source.label, consecutive_failures, backoff, e
                 );
                 if let Some(ref probe) = ctx.pull_probe {
                     probe.record_error(e.to_string());
@@ -834,7 +724,7 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
         interruptible_sleep(&ctx, interval).await;
     }
 
-    info!("Pull source '{}' stopped", source);
+    info!("Pull source '{}' stopped", source.label);
 }
 
 fn backoff_secs(attempt: u32) -> u64 {
@@ -851,9 +741,21 @@ mod tests {
     fn base_config() -> ILConfig {
         let mut config = ILConfig::new();
         config.pull_url = Some("https://example.com/api".to_string());
-        config.pull_name = Some("test-source".to_string());
         config.event_key = Some("il1api123".to_string());
+        config.map_key_alert_key = Some("id".to_string());
         config
+    }
+
+    fn validate_err(config: &ILConfig) -> String {
+        let result = std::panic::catch_unwind(|| validate_pull_config(config));
+        let err = result.expect_err("validation should have failed");
+        if let Some(s) = err.downcast_ref::<String>() {
+            s.clone()
+        } else if let Some(s) = err.downcast_ref::<&str>() {
+            s.to_string()
+        } else {
+            String::new()
+        }
     }
 
     // --- extract_items ---
@@ -861,7 +763,7 @@ mod tests {
     #[test]
     fn extract_items_from_nested_path() {
         let body = json!({"data": {"records": [{"id": 1}, {"id": 2}]}});
-        let items = extract_items(&body, Some("data.records"));
+        let items = extract_items(&body, Some("data.records")).unwrap();
         assert_eq!(items.len(), 2);
         assert_eq!(items[0]["id"], 1);
     }
@@ -869,30 +771,50 @@ mod tests {
     #[test]
     fn extract_items_from_bare_array() {
         let body = json!([{"id": 1}, {"id": 2}]);
-        assert_eq!(extract_items(&body, None).len(), 2);
+        assert_eq!(extract_items(&body, None).unwrap().len(), 2);
     }
 
     #[test]
     fn extract_items_wraps_single_object() {
         let body = json!({"result": {"id": 1}});
-        let items = extract_items(&body, Some("result"));
+        let items = extract_items(&body, Some("result")).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["id"], 1);
     }
 
     #[test]
-    fn extract_items_missing_path_yields_nothing() {
-        let body = json!({"items": [{"id": 1}]});
-        assert!(extract_items(&body, Some("nope")).is_empty());
+    fn extract_items_null_is_an_empty_page() {
+        let body = json!({"items": null});
+        assert!(extract_items(&body, Some("items")).unwrap().is_empty());
     }
 
     #[test]
-    fn extract_items_non_object_scalar_yields_nothing() {
-        let body = json!({"items": "not an array"});
-        assert!(extract_items(&body, Some("items")).is_empty());
+    fn extract_items_missing_path_lists_keys_not_values() {
+        // JSON-RPC style error body must not pass as an empty poll
+        let body = json!({"jsonrpc": "2.0", "error": {"message": "secret-detail"}});
+        let err = extract_items(&body, Some("items")).unwrap_err();
+        assert!(err.contains("'items' not found"), "got: {}", err);
+        assert!(err.contains("jsonrpc, error") || err.contains("error, jsonrpc"));
+        assert!(
+            !err.contains("secret-detail"),
+            "values must not leak: {}",
+            err
+        );
     }
 
-    // --- lookup_path ---
+    #[test]
+    fn extract_items_missing_path_in_non_object_body() {
+        let err = extract_items(&json!([1, 2]), Some("items")).unwrap_err();
+        assert!(err.contains("not an object"), "got: {}", err);
+    }
+
+    #[test]
+    fn extract_items_scalar_is_an_error() {
+        assert!(extract_items(&json!({"items": "nope"}), Some("items")).is_err());
+        assert!(extract_items(&json!(42), None).is_err());
+    }
+
+    // --- lookup_path / next_cursor ---
 
     #[test]
     fn lookup_prefers_literal_key_containing_dots() {
@@ -907,140 +829,113 @@ mod tests {
         assert_eq!(lookup_path(&body, "a.b").unwrap(), "found");
     }
 
-    // --- timestamps ---
+    #[test]
+    fn next_cursor_accepts_strings_and_numbers_only() {
+        assert_eq!(
+            next_cursor(&json!({"c": "abc"}), "c").as_deref(),
+            Some("abc")
+        );
+        assert_eq!(next_cursor(&json!({"c": 42}), "c").as_deref(), Some("42"));
+        assert_eq!(next_cursor(&json!({"c": ""}), "c"), None);
+        assert_eq!(next_cursor(&json!({"c": null}), "c"), None);
+        assert_eq!(next_cursor(&json!({"c": {"x": 1}}), "c"), None);
+        assert_eq!(next_cursor(&json!({}), "c"), None);
+    }
+
+    // --- flag parsing ---
 
     #[test]
-    fn timestamp_roundtrip_all_formats() {
-        let millis = 1_767_225_600_000i64;
-
-        for (format, value) in [
-            (TimestampFormat::EpochMs, json!(millis)),
-            (TimestampFormat::EpochS, json!(millis / 1000)),
-            (
-                TimestampFormat::Iso8601,
-                json!(render_timestamp(millis, TimestampFormat::Iso8601)),
-            ),
-        ] {
-            let parsed = parse_timestamp(&value, format).expect("should parse");
-            assert_eq!(parsed, millis, "roundtrip failed for {:?}", format);
-            let rendered = render_timestamp(parsed, format);
-            assert_eq!(
-                parse_timestamp(&json!(rendered), format),
-                Some(millis),
-                "re-parsing a rendered value failed for {:?}",
-                format
-            );
-        }
+    fn cursor_flag_parses_path_and_param() {
+        assert_eq!(
+            parse_cursor_flag("meta.next=cursor"),
+            Some(("meta.next".to_string(), "cursor".to_string()))
+        );
+        assert_eq!(parse_cursor_flag("next_cursor"), None);
+        assert_eq!(parse_cursor_flag("=cursor"), None);
+        assert_eq!(parse_cursor_flag("next= "), None);
     }
 
     #[test]
-    fn timestamp_parses_numeric_strings() {
+    fn header_flag_keeps_inner_equals_in_value() {
+        let (name, value) = parse_header_flag("Authorization=Basic dXM6cA==").unwrap();
+        assert_eq!(name.as_str(), "authorization");
+        assert_eq!(value.to_str().unwrap(), "Basic dXM6cA==");
+        assert!(value.is_sensitive());
+    }
+
+    #[test]
+    fn header_flag_error_names_only_the_leading_part() {
+        let err = parse_header_flag("X-Api-Key:supersecret").unwrap_err();
+        assert!(err.contains("'X-Api-Key'"), "got: {}", err);
+        assert!(!err.contains("supersecret"), "got: {}", err);
+    }
+
+    #[test]
+    fn header_flag_without_separator_is_not_echoed() {
+        let err = parse_header_flag("supersecret").unwrap_err();
+        assert!(!err.contains("supersecret"), "got: {}", err);
+    }
+
+    #[test]
+    fn header_flag_rejects_empty_and_invalid_names() {
+        assert!(parse_header_flag("=value").is_err());
+        assert!(parse_header_flag("Bad Name=value").is_err());
+        assert!(parse_header_flag("X-Ok=bad\nvalue").is_err());
+    }
+
+    // --- cursor key ---
+
+    #[test]
+    fn cursor_key_ignores_query_string() {
+        let a = cursor_db_key("k1", "https://api.example.com/siem/v1/events?limit=100");
+        let b = cursor_db_key("k1", "https://api.example.com/siem/v1/events?limit=500");
+        let c = cursor_db_key("k1", "https://api.example.com/siem/v1/events");
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert!(a.starts_with("pull_cursor:"));
+        assert_eq!(a.len(), "pull_cursor:".len() + 16);
+    }
+
+    #[test]
+    fn cursor_key_changes_with_path_or_event_key() {
+        let events = cursor_db_key("k1", "https://api.example.com/siem/v1/events");
+        let alerts = cursor_db_key("k1", "https://api.example.com/siem/v1/alerts");
+        let other_key = cursor_db_key("k2", "https://api.example.com/siem/v1/events");
+        assert_ne!(events, alerts);
+        assert_ne!(events, other_key);
+    }
+
+    #[test]
+    fn source_label_is_host_only() {
         assert_eq!(
-            parse_timestamp(&json!("1767225600"), TimestampFormat::EpochS),
-            Some(1_767_225_600_000)
+            source_label("https://api.example.com/x?api_key=secret"),
+            "api.example.com"
+        );
+        assert_eq!(source_label("not a url"), "pull");
+    }
+
+    // --- prepare_vendor_event ---
+
+    #[test]
+    fn vendor_event_custom_details_default_to_source() {
+        let config = base_config();
+        let event = prepare_vendor_event(&config, &json!({"id": "a"}), "api.example.com").unwrap();
+        assert_eq!(
+            event.customDetails.unwrap(),
+            json!({"source": "api.example.com"})
         );
     }
 
     #[test]
-    fn timestamp_rejects_garbage() {
-        assert_eq!(
-            parse_timestamp(&json!("not a date"), TimestampFormat::Iso8601),
-            None
-        );
-        assert_eq!(parse_timestamp(&json!(true), TimestampFormat::EpochS), None);
-    }
-
-    #[test]
-    fn timestamp_rejects_epoch_seconds_that_overflow_millis() {
-        // i64::MAX seconds panics in debug and wraps in release when scaled to millis.
-        for value in [
-            json!(i64::MAX),
-            json!(i64::MAX.to_string()),
-            json!(i64::MIN),
-        ] {
-            assert_eq!(
-                parse_timestamp(&value, TimestampFormat::EpochS),
-                None,
-                "{} must not parse",
-                value
-            );
-        }
-    }
-
-    #[test]
-    fn timestamp_rejects_millis_chrono_cannot_render() {
-        // Fits an i64 but lies past year 262143; rendered as iso8601 it used to become "".
-        let unrenderable = i64::MAX / 2;
-        assert_eq!(
-            parse_timestamp(&json!(unrenderable), TimestampFormat::EpochMs),
-            None
-        );
-        // epoch_s at the edge of i64 still fits after checked_mul, and must be caught too.
-        assert_eq!(
-            parse_timestamp(&json!(i64::MAX / 1000), TimestampFormat::EpochS),
-            None
-        );
-    }
-
-    #[test]
-    fn max_timestamp_ignores_an_overflowing_record() {
-        let items = vec![json!({"ts": 1_767_225_600}), json!({"ts": i64::MAX})];
-        let (max, distinct) = max_timestamp(&items, "ts", TimestampFormat::EpochS);
-        assert_eq!(max, Some(1_767_225_600_000));
-        assert_eq!(distinct, 1);
-    }
-
-    #[test]
-    fn max_timestamp_takes_max_not_last() {
-        let items = vec![json!({"ts": 300}), json!({"ts": 900}), json!({"ts": 100})];
-        let (max, distinct) = max_timestamp(&items, "ts", TimestampFormat::EpochMs);
-        assert_eq!(max, Some(900));
-        assert_eq!(distinct, 3);
-    }
-
-    #[test]
-    fn max_timestamp_counts_one_distinct_for_uniform_page() {
-        let items = vec![json!({"ts": 500}), json!({"ts": 500}), json!({"ts": 500})];
-        let (max, distinct) = max_timestamp(&items, "ts", TimestampFormat::EpochMs);
-        assert_eq!(max, Some(500));
-        assert_eq!(
-            distinct, 1,
-            "uniform page must be detectable as pathological"
-        );
-    }
-
-    #[test]
-    fn max_timestamp_skips_unparseable_records() {
-        let items = vec![json!({"ts": 100}), json!({"ts": "junk"}), json!({})];
-        let (max, distinct) = max_timestamp(&items, "ts", TimestampFormat::EpochMs);
-        assert_eq!(max, Some(100));
-        assert_eq!(distinct, 1);
-    }
-
-    // --- cursor mode / format parsing ---
-
-    #[test]
-    fn cursor_mode_parses_each_variant() {
-        // An unset mode and an explicit "none" both resolve to the same default.
-        assert_eq!(CursorMode::from_config(&ILConfig::new()), CursorMode::None);
-
-        for (raw, expected) in [
-            ("token", CursorMode::Token),
-            ("timestamp", CursorMode::Timestamp),
-            ("none", CursorMode::None),
-        ] {
-            let mut config = ILConfig::new();
-            config.pull_cursor_mode = Some(raw.to_string());
-            assert_eq!(CursorMode::from_config(&config), expected);
-        }
-    }
-
-    #[test]
-    fn timestamp_format_defaults_to_iso() {
-        assert_eq!(
-            TimestampFormat::from_config(&ILConfig::new()),
-            TimestampFormat::Iso8601
-        );
+    fn vendor_event_forwards_record_as_custom_details() {
+        let mut config = base_config();
+        config.forward_message_payload = true;
+        config.severity = Some(2);
+        let record = json!({"id": "a", "priority": 1});
+        let event = prepare_vendor_event(&config, &record, "h").unwrap();
+        assert_eq!(event.customDetails.unwrap(), record);
+        assert_eq!(event.severity, Some(2), "static enrichment applies");
+        assert_eq!(event.alertKey.as_deref(), Some("a"));
     }
 
     // --- backoff ---
@@ -1061,219 +956,98 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "--pull_name is required")]
-    fn validate_requires_name() {
+    fn validate_accepts_full_oauth_token_source() {
         let mut config = base_config();
-        config.pull_name = None;
+        config.pull_cursor_path = Some("next_cursor".to_string());
+        config.pull_cursor_param = Some("cursor".to_string());
+        config.pull_headers = vec!["X-Tenant-ID=abc".to_string()];
+        config.pull_oauth_url = Some("https://id.example.com/token".to_string());
+        config.pull_oauth_client_id = Some("cid".to_string());
+        config.pull_oauth_secret = Some("secret".to_string());
+        config.pull_oauth_scope = Some("token".to_string());
         validate_pull_config(&config);
     }
 
     #[test]
-    #[should_panic(expected = "--event_key is required")]
-    fn validate_requires_event_key() {
+    fn validate_requires_event_key_and_alert_key() {
         let mut config = base_config();
         config.event_key = None;
-        validate_pull_config(&config);
+        assert!(validate_err(&config).contains("--event_key is required"));
+
+        let mut config = base_config();
+        config.map_key_alert_key = None;
+        assert!(validate_err(&config).contains("--map_key_alert_key is required"));
     }
 
     #[test]
-    #[should_panic(expected = "--pull_interval must be between")]
-    fn validate_rejects_out_of_range_interval() {
+    fn validate_rejects_invalid_url_without_echoing_it() {
         let mut config = base_config();
-        config.pull_interval = 5;
-        validate_pull_config(&config);
+        config.pull_url = Some("not a url?api_key=secret".to_string());
+        let err = validate_err(&config);
+        assert!(
+            err.contains("--pull_url is not a valid URL"),
+            "got: {}",
+            err
+        );
+        assert!(!err.contains("secret"));
     }
 
     #[test]
-    #[should_panic(expected = "--pull_initial_lookback must be at most")]
-    fn validate_rejects_overflowing_lookback() {
-        // Scaled to millis this wraps i64 and would seed a garbage cursor.
-        let mut config = base_config();
-        config.pull_initial_lookback = u64::MAX;
-        validate_pull_config(&config);
+    fn validate_interval_bounds() {
+        for bad in [9, 3601] {
+            let mut config = base_config();
+            config.pull_interval = bad;
+            assert!(validate_err(&config).contains("--pull_interval must be between"));
+        }
+        for ok in [10, 3600] {
+            let mut config = base_config();
+            config.pull_interval = ok;
+            validate_pull_config(&config);
+        }
     }
 
     #[test]
-    fn validate_accepts_lookback_at_the_limit() {
+    fn validate_rejects_half_a_cursor() {
         let mut config = base_config();
-        config.pull_initial_lookback = MAX_INITIAL_LOOKBACK_SECS;
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_body must be valid JSON")]
-    fn validate_rejects_malformed_body() {
-        let mut config = base_config();
-        config.pull_body = Some("{not json".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "cannot be combined with pull_cursor_mode")]
-    fn validate_rejects_body_with_token_cursor() {
-        let mut config = base_config();
-        config.pull_body = Some("{}".to_string());
-        config.pull_cursor_mode = Some("token".to_string());
         config.pull_cursor_path = Some("next".to_string());
+        assert!(validate_err(&config).contains("--pull_cursor must be PATH=PARAM"));
+
+        let mut config = base_config();
+        config.pull_cursor_path = Some(" ".to_string());
         config.pull_cursor_param = Some("cursor".to_string());
-        validate_pull_config(&config);
+        assert!(validate_err(&config).contains("--pull_cursor must be PATH=PARAM"));
     }
 
     #[test]
-    fn validate_allows_body_with_no_cursor() {
+    fn validate_rejects_malformed_header() {
         let mut config = base_config();
-        config.pull_body = Some(r#"{"jsonrpc":"2.0"}"#.to_string());
-        config.pull_cursor_mode = Some("none".to_string());
-        config.pull_dedup_key = Some("id".to_string());
-        validate_pull_config(&config);
+        config.pull_headers = vec!["X-Api-Key:secret".to_string()];
+        let err = validate_err(&config);
+        assert!(err.contains("expected KEY=VALUE"), "got: {}", err);
+        assert!(!err.contains("secret"));
     }
 
     #[test]
-    #[should_panic(expected = "--pull_dedup_key is required when pull_cursor_mode is 'timestamp'")]
-    fn validate_requires_dedup_for_timestamp_mode() {
+    fn validate_oauth_requires_client_id_and_secret() {
         let mut config = base_config();
-        config.pull_cursor_mode = Some("timestamp".to_string());
-        config.pull_cursor_path = Some("updated_at".to_string());
-        config.pull_cursor_param = Some("since".to_string());
-        validate_pull_config(&config);
-    }
+        config.pull_oauth_url = Some("https://id.example.com/token".to_string());
+        config.pull_oauth_secret = Some("s".to_string());
+        assert!(validate_err(&config).contains("--pull_oauth_client_id is required"));
 
-    #[test]
-    fn validate_accepts_timestamp_mode_with_dedup() {
         let mut config = base_config();
-        config.pull_cursor_mode = Some("timestamp".to_string());
-        config.pull_cursor_path = Some("updated_at".to_string());
-        config.pull_cursor_param = Some("since".to_string());
-        config.pull_dedup_key = Some("id".to_string());
-        validate_pull_config(&config);
+        config.pull_oauth_url = Some("https://id.example.com/token".to_string());
+        config.pull_oauth_client_id = Some("cid".to_string());
+        assert!(validate_err(&config).contains("ILERT_PULL_OAUTH_SECRET"));
     }
 
     #[test]
-    #[should_panic(expected = "--pull_cursor_param is required")]
-    fn validate_requires_cursor_param_for_token_mode() {
+    fn validate_rejects_oauth_settings_without_url() {
         let mut config = base_config();
-        config.pull_cursor_mode = Some("token".to_string());
-        config.pull_cursor_path = Some("next_cursor".to_string());
-        validate_pull_config(&config);
-    }
+        config.pull_oauth_client_id = Some("cid".to_string());
+        assert!(validate_err(&config).contains("require --pull_oauth_url"));
 
-    #[test]
-    #[should_panic(expected = "Unknown pull_auth")]
-    fn validate_rejects_unknown_auth() {
         let mut config = base_config();
-        config.pull_auth = Some("kerberos".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_client_secret")]
-    fn validate_oauth_requires_secret() {
-        let mut config = base_config();
-        config.pull_auth = Some("oauth2".to_string());
-        config.pull_token_url = Some("https://id.example.com/token".to_string());
-        config.pull_client_id = Some("cid".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_auth_value")]
-    fn validate_header_auth_requires_value() {
-        let mut config = base_config();
-        config.pull_auth = Some("header".to_string());
-        config.pull_auth_header = Some("X-API-Key".to_string());
-        validate_pull_config(&config);
-    }
-
-    // --- auth credentials supplied without the matching mode ---
-
-    #[test]
-    #[should_panic(expected = "--pull_auth_header requires --pull_auth header")]
-    fn validate_rejects_header_credentials_without_mode() {
-        // These flags would be dropped and every request sent unauthenticated.
-        let mut config = base_config();
-        config.pull_auth_header = Some("X-API-Key".to_string());
-        config.pull_auth_value = Some("secret".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_username requires --pull_auth basic")]
-    fn validate_rejects_basic_credentials_without_mode() {
-        let mut config = base_config();
-        config.pull_username = Some("svc".to_string());
-        config.pull_password = Some("secret".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_token_url requires --pull_auth oauth2")]
-    fn validate_rejects_oauth_credentials_without_mode() {
-        let mut config = base_config();
-        config.pull_token_url = Some("https://id.example.com/token".to_string());
-        config.pull_client_id = Some("cid".to_string());
-        config.pull_client_secret = Some("secret".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "--pull_username requires --pull_auth basic, but pull_auth is 'oauth2'"
-    )]
-    fn validate_rejects_credentials_belonging_to_another_mode() {
-        // oauth2 is correct, but the stray basic credentials are inert and must not pass.
-        let mut config = base_config();
-        config.pull_auth = Some("oauth2".to_string());
-        config.pull_token_url = Some("https://id.example.com/token".to_string());
-        config.pull_client_id = Some("cid".to_string());
-        config.pull_client_secret = Some("secret".to_string());
-        config.pull_username = Some("leftover".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    #[should_panic(expected = "--pull_scope requires --pull_auth oauth2")]
-    fn validate_rejects_scope_without_oauth() {
-        let mut config = base_config();
-        config.pull_auth = Some("header".to_string());
-        config.pull_auth_header = Some("X-API-Key".to_string());
-        config.pull_auth_value = Some("secret".to_string());
-        config.pull_scope = Some("token".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    fn validate_accepts_each_mode_with_only_its_own_credentials() {
-        // The check must not be satisfiable by rejecting everything.
-        let mut header = base_config();
-        header.pull_auth = Some("header".to_string());
-        header.pull_auth_header = Some("X-API-Key".to_string());
-        header.pull_auth_value = Some("secret".to_string());
-        validate_pull_config(&header);
-
-        let mut basic = base_config();
-        basic.pull_auth = Some("basic".to_string());
-        basic.pull_username = Some("svc".to_string());
-        basic.pull_password = Some("secret".to_string());
-        validate_pull_config(&basic);
-
-        let mut oauth = base_config();
-        oauth.pull_auth = Some("oauth2".to_string());
-        oauth.pull_token_url = Some("https://id.example.com/token".to_string());
-        oauth.pull_client_id = Some("cid".to_string());
-        oauth.pull_client_secret = Some("secret".to_string());
-        oauth.pull_scope = Some("token".to_string());
-        validate_pull_config(&oauth);
-    }
-
-    #[test]
-    fn validate_accepts_explicit_none_auth_with_no_credentials() {
-        let mut config = base_config();
-        config.pull_auth = Some("none".to_string());
-        validate_pull_config(&config);
-    }
-
-    #[test]
-    fn cursor_db_key_is_namespaced() {
-        assert_eq!(cursor_db_key("sophos-events"), "pull_cursor:sophos-events");
+        config.pull_oauth_scope = Some("token".to_string());
+        assert!(validate_err(&config).contains("require --pull_oauth_url"));
     }
 }

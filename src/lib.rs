@@ -141,7 +141,6 @@ impl EdgeConnectorProbeState {
 
 pub struct PullProbeState {
     pub polling: AtomicBool,
-    pub items_fetched: std::sync::atomic::AtomicU64,
     /// Passes through the pull loop, whether they fetched, failed or were skipped.
     pub cycles: std::sync::atomic::AtomicU64,
     pub last_error: std::sync::Mutex<Option<String>>,
@@ -151,7 +150,6 @@ impl PullProbeState {
     pub fn new() -> Self {
         Self {
             polling: AtomicBool::new(false),
-            items_fetched: std::sync::atomic::AtomicU64::new(0),
             cycles: std::sync::atomic::AtomicU64::new(0),
             last_error: std::sync::Mutex::new(None),
         }

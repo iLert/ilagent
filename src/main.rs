@@ -260,19 +260,11 @@ pub fn build_cli() -> Command {
         .arg(Arg::new("pull_url")
             .long("pull_url")
             .value_name("URL")
-            .help("Poll this HTTP endpoint for events (enables the pull connector)"))
-        .arg(Arg::new("pull_name")
-            .long("pull_name")
-            .value_name("NAME")
-            .help("Name for this pull source, keys its stored cursor and dedup state (required)"))
+            .help("Poll this HTTP endpoint for events (enables the pull connector, requires --event_key and --map_key_alert_key)"))
         .arg(Arg::new("pull_interval")
             .long("pull_interval")
             .value_name("SECONDS")
             .help("Seconds to wait between pull cycles (default: 60, range 10-3600)"))
-        .arg(Arg::new("pull_body")
-            .long("pull_body")
-            .value_name("JSON")
-            .help("Request body for the pull source, implies POST (e.g. for JSON-RPC APIs)"))
         .arg(Arg::new("pull_items_path")
             .long("pull_items_path")
             .value_name("PATH")
@@ -282,69 +274,22 @@ pub fn build_cli() -> Command {
             .value_name("KEY=VALUE")
             .action(ArgAction::Append)
             .help("Static header sent on every pull request (repeatable, e.g. --pull_header X-Tenant-ID=abc)"))
-        .arg(Arg::new("pull_auth")
-            .long("pull_auth")
-            .value_name("MODE")
-            .value_parser(["none", "header", "basic", "oauth2"])
-            .help("Authentication mode for the pull source (default: none)"))
-        .arg(Arg::new("pull_auth_header")
-            .long("pull_auth_header")
-            .value_name("HEADER")
-            .help("Header name for pull authentication (e.g. Authorization, X-API-Key)"))
-        .arg(Arg::new("pull_auth_value")
-            .long("pull_auth_value")
-            .value_name("VALUE")
-            .help("Auth header value for the pull source (falls back to ILERT_PULL_AUTH_VALUE env var)"))
-        .arg(Arg::new("pull_username")
-            .long("pull_username")
-            .value_name("USERNAME")
-            .help("Username for basic auth on the pull source"))
-        .arg(Arg::new("pull_password")
-            .long("pull_password")
-            .value_name("PASSWORD")
-            .help("Password for basic auth on the pull source (falls back to ILERT_PULL_PASSWORD env var)"))
-        .arg(Arg::new("pull_token_url")
-            .long("pull_token_url")
+        .arg(Arg::new("pull_cursor")
+            .long("pull_cursor")
+            .value_name("PATH=PARAM")
+            .help("Token paging: read PATH from the response and send it back as ?PARAM= (e.g. next_cursor=cursor)"))
+        .arg(Arg::new("pull_oauth_url")
+            .long("pull_oauth_url")
             .value_name("URL")
-            .help("OAuth2 token endpoint for the pull source"))
-        .arg(Arg::new("pull_client_id")
-            .long("pull_client_id")
+            .help("OAuth2 client-credentials token endpoint, enables oauth (secret from ILERT_PULL_OAUTH_SECRET env var)"))
+        .arg(Arg::new("pull_oauth_client_id")
+            .long("pull_oauth_client_id")
             .value_name("CLIENT_ID")
-            .help("OAuth2 client id for the pull source"))
-        .arg(Arg::new("pull_client_secret")
-            .long("pull_client_secret")
-            .value_name("CLIENT_SECRET")
-            .help("OAuth2 client secret (falls back to ILERT_PULL_CLIENT_SECRET env var)"))
-        .arg(Arg::new("pull_scope")
-            .long("pull_scope")
+            .help("OAuth2 client id, required with --pull_oauth_url"))
+        .arg(Arg::new("pull_oauth_scope")
+            .long("pull_oauth_scope")
             .value_name("SCOPE")
-            .help("OAuth2 scope for the pull source (e.g. 'token' for Sophos Central)"))
-        .arg(Arg::new("pull_cursor_mode")
-            .long("pull_cursor_mode")
-            .value_name("MODE")
-            .value_parser(["none", "token", "timestamp"])
-            .help("How to resume between polls (default: none, snapshot with dedup)"))
-        .arg(Arg::new("pull_cursor_path")
-            .long("pull_cursor_path")
-            .value_name("PATH")
-            .help("token: JSON path in the response to the next cursor. timestamp: path within each record"))
-        .arg(Arg::new("pull_cursor_param")
-            .long("pull_cursor_param")
-            .value_name("PARAM")
-            .help("Query parameter used to send the cursor back (token and timestamp modes)"))
-        .arg(Arg::new("pull_cursor_format")
-            .long("pull_cursor_format")
-            .value_name("FORMAT")
-            .value_parser(["epoch_s", "epoch_ms", "iso8601"])
-            .help("Timestamp cursor format (default: iso8601)"))
-        .arg(Arg::new("pull_initial_lookback")
-            .long("pull_initial_lookback")
-            .value_name("SECONDS")
-            .help("Timestamp mode: how far back to reach on the first run (default: 3600, max 31536000)"))
-        .arg(Arg::new("pull_dedup_key")
-            .long("pull_dedup_key")
-            .value_name("PATH")
-            .help("JSON path to a stable unique id per record, enables deduplication"));
+            .help("OAuth2 scope (optional)"));
 
     for arg in consumer_args() {
         daemon_cmd = daemon_cmd.arg(arg);
@@ -506,25 +451,12 @@ const EDGE_REJECTED_STRING_ARGS: &[&str] = &[
     "shift_offset",
     "max_retries",
     "pull_url",
-    "pull_name",
     "pull_interval",
-    "pull_body",
     "pull_items_path",
-    "pull_auth",
-    "pull_auth_header",
-    "pull_auth_value",
-    "pull_username",
-    "pull_password",
-    "pull_token_url",
-    "pull_client_id",
-    "pull_client_secret",
-    "pull_scope",
-    "pull_cursor_mode",
-    "pull_cursor_path",
-    "pull_cursor_param",
-    "pull_cursor_format",
-    "pull_initial_lookback",
-    "pull_dedup_key",
+    "pull_cursor",
+    "pull_oauth_url",
+    "pull_oauth_client_id",
+    "pull_oauth_scope",
 ];
 
 const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buffer"];
@@ -712,6 +644,18 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
         config.heartbeat_key = Some(heartbeat_key.to_string());
     }
 
+    // The shared --event_key / --map_key_* would silently change the broker's events.
+    if matches.get_one::<String>("pull_url").is_some() {
+        for broker in ["mqtt_host", "kafka_brokers"] {
+            if matches.get_one::<String>(broker).is_some() {
+                panic!(
+                    "--pull_url cannot be combined with --{}, run the pull connector as its own agent with its own --file",
+                    broker
+                );
+            }
+        }
+    }
+
     // Static enrichment (labels/severity/services) feeds enrich_event, which runs on the
     // HTTP path too — so parse it whenever events can flow, not just for MQTT/Kafka.
     let has_event_path = config.start_http
@@ -819,15 +763,15 @@ fn build_normal_daemon_config(matches: &ArgMatches, mut config: ILConfig) -> ILC
 
 pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILConfig {
     config.pull_url = matches.get_one::<String>("pull_url").map(|s| s.to_string());
-    config.pull_name = matches
-        .get_one::<String>("pull_name")
-        .map(|s| s.to_string());
-    config.pull_body = matches
-        .get_one::<String>("pull_body")
-        .map(|s| s.to_string());
     config.pull_items_path = matches
         .get_one::<String>("pull_items_path")
         .map(|s| s.to_string());
+
+    if let Some(interval) = matches.get_one::<String>("pull_interval") {
+        config.pull_interval = interval
+            .parse::<u64>()
+            .expect("Failed to parse pull_interval as integer");
+    }
 
     if let Some(headers) = matches.get_many::<String>("pull_header") {
         config.pull_headers = headers.map(|s| s.to_string()).collect();
@@ -837,90 +781,28 @@ pub fn parse_pull_arguments(matches: &ArgMatches, mut config: ILConfig) -> ILCon
         );
     }
 
-    if let Some(interval) = matches.get_one::<String>("pull_interval") {
-        config.pull_interval = interval
-            .parse::<u64>()
-            .expect("Failed to parse pull_interval as integer");
+    if let Some(cursor) = matches.get_one::<String>("pull_cursor") {
+        let Some((path, param)) = consumers::pull::parse_cursor_flag(cursor) else {
+            panic!("--pull_cursor must be PATH=PARAM (e.g. next_cursor=cursor)");
+        };
+        config.pull_cursor_path = Some(path);
+        config.pull_cursor_param = Some(param);
     }
 
-    config.pull_auth = matches
-        .get_one::<String>("pull_auth")
+    config.pull_oauth_url = matches
+        .get_one::<String>("pull_oauth_url")
+        .map(|s| s.to_string());
+    config.pull_oauth_client_id = matches
+        .get_one::<String>("pull_oauth_client_id")
+        .map(|s| s.to_string());
+    config.pull_oauth_scope = matches
+        .get_one::<String>("pull_oauth_scope")
         .map(|s| s.to_string());
 
-    // Read only for the selected mode: an ambient leftover must not look like a
-    // deliberately supplied credential to the mismatch check in validate_pull_config.
-    let auth_mode = config.pull_auth.as_deref().unwrap_or("none");
-    let secret_env = |mode: &str, var: &str| -> Option<String> {
-        if auth_mode != mode {
-            return None;
-        }
-        let value = std::env::var(var).ok();
-        // or_else is lazy, so reaching here means the environment really is the source.
-        if value.is_some() {
-            info!(
-                "Pull secret has been configured from {} environment variable",
-                var
-            );
-        }
-        value
-    };
-
-    config.pull_auth_header = matches
-        .get_one::<String>("pull_auth_header")
-        .map(|s| s.to_string());
-    config.pull_auth_value = matches
-        .get_one::<String>("pull_auth_value")
-        .map(|s| s.to_string())
-        .or_else(|| secret_env("header", "ILERT_PULL_AUTH_VALUE"));
-    config.pull_username = matches
-        .get_one::<String>("pull_username")
-        .map(|s| s.to_string());
-    config.pull_password = matches
-        .get_one::<String>("pull_password")
-        .map(|s| s.to_string())
-        .or_else(|| secret_env("basic", "ILERT_PULL_PASSWORD"));
-    config.pull_token_url = matches
-        .get_one::<String>("pull_token_url")
-        .map(|s| s.to_string());
-    config.pull_client_id = matches
-        .get_one::<String>("pull_client_id")
-        .map(|s| s.to_string());
-    config.pull_client_secret = matches
-        .get_one::<String>("pull_client_secret")
-        .map(|s| s.to_string())
-        .or_else(|| secret_env("oauth2", "ILERT_PULL_CLIENT_SECRET"));
-    config.pull_scope = matches
-        .get_one::<String>("pull_scope")
-        .map(|s| s.to_string());
-
-    config.pull_cursor_mode = matches
-        .get_one::<String>("pull_cursor_mode")
-        .map(|s| s.to_string());
-    config.pull_cursor_path = matches
-        .get_one::<String>("pull_cursor_path")
-        .map(|s| s.to_string());
-    config.pull_cursor_param = matches
-        .get_one::<String>("pull_cursor_param")
-        .map(|s| s.to_string());
-    config.pull_cursor_format = matches
-        .get_one::<String>("pull_cursor_format")
-        .map(|s| s.to_string());
-
-    if let Some(lookback) = matches.get_one::<String>("pull_initial_lookback") {
-        config.pull_initial_lookback = lookback
-            .parse::<u64>()
-            .expect("Failed to parse pull_initial_lookback as integer");
+    // Env only, like ILERT_EDGE_CONNECTOR_KEY, and only read when oauth is enabled.
+    if config.pull_oauth_url.is_some() {
+        config.pull_oauth_secret = std::env::var("ILERT_PULL_OAUTH_SECRET").ok();
     }
-
-    config.pull_dedup_key = matches
-        .get_one::<String>("pull_dedup_key")
-        .map(|s| s.to_string());
-
-    // The url is not logged: it routinely carries a key or token in its query string.
-    info!(
-        "Pull source configured: '{}'",
-        config.pull_name.as_deref().unwrap_or("?")
-    );
 
     config
 }
@@ -2013,103 +1895,161 @@ mod tests {
 
     // --- build_daemon_config: pull connector ---
 
-    /// Each secret env var is read only for its own auth mode, so a stale variable
-    /// cannot trip the cross-mode check and refuse to start a correct agent.
-    /// One test to avoid env var races, as with the policy and edge connector tests.
+    fn pull_args(extra: &[&'static str]) -> Vec<&'static str> {
+        let mut args = vec![
+            "ilagent",
+            "daemon",
+            "--pull_url",
+            "https://api.example.com/siem/v1/events",
+            "--event_key",
+            "il1api123",
+            "--map_key_alert_key",
+            "id",
+        ];
+        args.extend_from_slice(extra);
+        args
+    }
+
+    fn pull_config(extra: &[&'static str]) -> ILConfig {
+        let m = build_cli().try_get_matches_from(pull_args(extra)).unwrap();
+        let sub = m.subcommand_matches("daemon").unwrap();
+        build_daemon_config(sub, &m)
+    }
+
+    fn pull_config_panic(extra: &[&'static str]) -> String {
+        match std::panic::catch_unwind(|| pull_config(extra)) {
+            Ok(_) => panic!("expected the pull config to be rejected"),
+            Err(err) => panic_message(err),
+        }
+    }
+
     #[test]
-    fn daemon_config_pull_secret_env_fallbacks_are_scoped_to_their_mode() {
+    fn daemon_config_pull_parses_slim_interface() {
+        let config = pull_config(&[
+            "--pull_interval",
+            "30",
+            "--pull_items_path",
+            "items",
+            "--pull_header",
+            "X-Tenant-ID=t1",
+            "--pull_header",
+            "X-Other=o",
+            "--pull_cursor",
+            "next_cursor=cursor",
+            "--map_key_summary",
+            "name",
+            "--forward_message_payload",
+        ]);
+        assert_eq!(config.pull_interval, 30);
+        assert_eq!(config.pull_items_path.as_deref(), Some("items"));
+        assert_eq!(config.pull_headers, vec!["X-Tenant-ID=t1", "X-Other=o"]);
+        assert_eq!(config.pull_cursor_path.as_deref(), Some("next_cursor"));
+        assert_eq!(config.pull_cursor_param.as_deref(), Some("cursor"));
+        assert_eq!(config.map_key_summary.as_deref(), Some("name"));
+        assert!(config.forward_message_payload);
+        assert!(config.pull_oauth_url.is_none());
+    }
+
+    #[test]
+    fn daemon_config_pull_rejects_malformed_cursor() {
+        let msg = pull_config_panic(&["--pull_cursor", "next_cursor"]);
+        assert!(
+            msg.contains("--pull_cursor must be PATH=PARAM"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn daemon_config_pull_requires_map_key_alert_key() {
+        let result = std::panic::catch_unwind(|| {
+            let m = build_cli()
+                .try_get_matches_from(vec![
+                    "ilagent",
+                    "daemon",
+                    "--pull_url",
+                    "https://api.example.com/events",
+                    "--event_key",
+                    "il1api123",
+                ])
+                .unwrap();
+            let sub = m.subcommand_matches("daemon").unwrap();
+            build_daemon_config(sub, &m);
+        });
+        let msg = panic_message(result.unwrap_err());
+        assert!(
+            msg.contains("--map_key_alert_key is required"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn daemon_config_pull_rejects_brokers() {
+        let msg = pull_config_panic(&["-m", "broker.local", "-e", "ilert/events"]);
+        assert!(
+            msg.contains("--pull_url cannot be combined with --mqtt_host"),
+            "got: {}",
+            msg
+        );
+
+        let msg = pull_config_panic(&["--kafka_brokers", "localhost:9092", "-e", "events"]);
+        assert!(
+            msg.contains("--pull_url cannot be combined with --kafka_brokers"),
+            "got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn daemon_config_pull_allows_http_port() {
+        let config = pull_config(&["--port", "8977"]);
+        assert!(config.start_http);
+        assert!(config.pull_url.is_some());
+    }
+
+    /// One test for everything touching ILERT_PULL_OAUTH_SECRET, to avoid env var races.
+    #[test]
+    fn daemon_config_pull_oauth_secret_from_env() {
         unsafe {
-            std::env::set_var("ILERT_PULL_AUTH_VALUE", "env-header-value");
-            std::env::set_var("ILERT_PULL_PASSWORD", "env-password");
-            std::env::set_var("ILERT_PULL_CLIENT_SECRET", "env-client-secret");
+            std::env::remove_var("ILERT_PULL_OAUTH_SECRET");
         }
 
-        // header mode: only ILERT_PULL_AUTH_VALUE is its own
-        {
-            let m = build_cli()
-                .try_get_matches_from(vec![
-                    "ilagent",
-                    "daemon",
-                    "--pull_url",
-                    "https://alerts.internal/api/open",
-                    "--pull_name",
-                    "internal",
-                    "--event_key",
-                    "il1api123",
-                    "--pull_auth",
-                    "header",
-                    "--pull_auth_header",
-                    "X-API-Key",
-                ])
-                .unwrap();
-            let sub = m.subcommand_matches("daemon").unwrap();
-            let config = build_daemon_config(sub, &m);
+        let oauth = [
+            "--pull_oauth_url",
+            "https://id.example.com/token",
+            "--pull_oauth_client_id",
+            "cid",
+            "--pull_oauth_scope",
+            "token",
+        ];
 
-            assert_eq!(config.pull_auth_value.unwrap(), "env-header-value");
-            assert!(
-                config.pull_password.is_none(),
-                "a basic credential must not be loaded from the environment in header mode"
-            );
-            assert!(
-                config.pull_client_secret.is_none(),
-                "an oauth credential must not be loaded from the environment in header mode"
-            );
-        }
-
-        // oauth2 mode: only ILERT_PULL_CLIENT_SECRET is its own
-        {
-            let m = build_cli()
-                .try_get_matches_from(vec![
-                    "ilagent",
-                    "daemon",
-                    "--pull_url",
-                    "https://alerts.internal/api/open",
-                    "--pull_name",
-                    "internal",
-                    "--event_key",
-                    "il1api123",
-                    "--pull_auth",
-                    "oauth2",
-                    "--pull_token_url",
-                    "https://id.example.com/token",
-                    "--pull_client_id",
-                    "cid",
-                ])
-                .unwrap();
-            let sub = m.subcommand_matches("daemon").unwrap();
-            let config = build_daemon_config(sub, &m);
-
-            assert_eq!(config.pull_client_secret.unwrap(), "env-client-secret");
-            assert!(config.pull_auth_value.is_none());
-            assert!(config.pull_password.is_none());
-        }
-
-        // no auth mode selected: nothing ambient is picked up at all
-        {
-            let m = build_cli()
-                .try_get_matches_from(vec![
-                    "ilagent",
-                    "daemon",
-                    "--pull_url",
-                    "https://alerts.internal/api/open",
-                    "--pull_name",
-                    "internal",
-                    "--event_key",
-                    "il1api123",
-                ])
-                .unwrap();
-            let sub = m.subcommand_matches("daemon").unwrap();
-            let config = build_daemon_config(sub, &m);
-
-            assert!(config.pull_auth_value.is_none());
-            assert!(config.pull_password.is_none());
-            assert!(config.pull_client_secret.is_none());
-        }
+        // missing secret
+        let msg = pull_config_panic(&oauth);
+        assert!(msg.contains("ILERT_PULL_OAUTH_SECRET"), "got: {}", msg);
 
         unsafe {
-            std::env::remove_var("ILERT_PULL_AUTH_VALUE");
-            std::env::remove_var("ILERT_PULL_PASSWORD");
-            std::env::remove_var("ILERT_PULL_CLIENT_SECRET");
+            std::env::set_var("ILERT_PULL_OAUTH_SECRET", "env-secret");
+        }
+
+        let config = pull_config(&oauth);
+        assert_eq!(config.pull_oauth_secret.as_deref(), Some("env-secret"));
+        assert_eq!(config.pull_oauth_client_id.as_deref(), Some("cid"));
+        assert_eq!(config.pull_oauth_scope.as_deref(), Some("token"));
+
+        // without oauth the secret is not read, so a stale variable stays inert
+        let config = pull_config(&[]);
+        assert!(config.pull_oauth_secret.is_none());
+
+        // the secret has no flag
+        assert!(
+            build_cli()
+                .try_get_matches_from(pull_args(&["--pull_oauth_secret", "x"]))
+                .is_err()
+        );
+
+        unsafe {
+            std::env::remove_var("ILERT_PULL_OAUTH_SECRET");
         }
     }
 
@@ -2707,6 +2647,41 @@ mod tests {
             });
             let msg = panic_message(result.unwrap_err());
             assert!(msg.contains("between 5 and 120"), "got: {}", msg);
+        }
+
+        // rejects every pull flag
+        for (flag, value) in [
+            ("--pull_url", "https://api.example.com/events"),
+            ("--pull_interval", "60"),
+            ("--pull_items_path", "items"),
+            ("--pull_header", "X-Tenant-ID=t1"),
+            ("--pull_cursor", "next=cursor"),
+            ("--pull_oauth_url", "https://id.example.com/token"),
+            ("--pull_oauth_client_id", "cid"),
+            ("--pull_oauth_scope", "token"),
+        ] {
+            let result = std::panic::catch_unwind(|| {
+                let m = build_cli()
+                    .try_get_matches_from(vec![
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        flag,
+                        value,
+                    ])
+                    .unwrap();
+                let sub = m.subcommand_matches("daemon").unwrap();
+                build_daemon_config(sub, &m);
+            });
+            let msg = panic_message(result.unwrap_err());
+            assert!(
+                msg.contains(&format!("{} cannot be used with --edge_mode", flag)),
+                "got: {}",
+                msg
+            );
         }
 
         unsafe {
