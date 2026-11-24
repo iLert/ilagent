@@ -132,9 +132,8 @@ async fn deliver_item(
         "kafka" => {
             deliver_kafka(
                 ctx,
-                kafka_producer.ok_or_else(|| {
-                    DeliveryError::retryable("kafka producer not initialized".to_string())
-                })?,
+                kafka_producer
+                    .ok_or_else(|| DeliveryError::retryable("kafka producer not initialized".to_string()))?,
                 item,
             )
             .await
@@ -142,22 +141,17 @@ async fn deliver_item(
         "mqtt" => {
             deliver_mqtt(
                 ctx,
-                mqtt_client.ok_or_else(|| {
-                    DeliveryError::retryable("mqtt client not initialized".to_string())
-                })?,
-                mqtt_ack.ok_or_else(|| {
-                    DeliveryError::retryable("mqtt ack notify not initialized".to_string())
-                })?,
+                mqtt_client
+                    .ok_or_else(|| DeliveryError::retryable("mqtt client not initialized".to_string()))?,
+                mqtt_ack
+                    .ok_or_else(|| DeliveryError::retryable("mqtt ack notify not initialized".to_string()))?,
                 item,
             )
             .await
         }
         "script" => deliver_script(ctx, item).await,
         "stdout" => deliver_stdout(item),
-        _ => Err(DeliveryError::non_retryable(format!(
-            "unknown edge mode: {}",
-            mode
-        ))),
+        _ => Err(DeliveryError::non_retryable(format!("unknown edge mode: {}", mode))),
     }
 }
 
@@ -166,9 +160,11 @@ async fn deliver_http(
     client: &reqwest::Client,
     item: &EdgeConnectorItem,
 ) -> Result<(), DeliveryError> {
-    let url = ctx.config.edge_http_url.as_ref().ok_or_else(|| {
-        DeliveryError::non_retryable("edge_http_url is required for http mode".to_string())
-    })?;
+    let url = ctx
+        .config
+        .edge_http_url
+        .as_ref()
+        .ok_or_else(|| DeliveryError::non_retryable("edge_http_url is required for http mode".to_string()))?;
 
     let method = ctx.config.edge_http_method.as_deref().unwrap_or("POST");
     let event_type = item
@@ -185,12 +181,7 @@ async fn deliver_http(
     let builder = match method.to_uppercase().as_str() {
         "POST" => client.post(url),
         "PUT" => client.put(url),
-        _ => {
-            return Err(DeliveryError::non_retryable(format!(
-                "unsupported HTTP method: {}",
-                method
-            )));
-        }
+        _ => return Err(DeliveryError::non_retryable(format!("unsupported HTTP method: {}", method))),
     };
 
     let mut builder = builder
@@ -239,9 +230,11 @@ async fn deliver_kafka(
 ) -> Result<(), DeliveryError> {
     use rdkafka::producer::FutureRecord;
 
-    let topic = ctx.config.edge_topic.as_deref().ok_or_else(|| {
-        DeliveryError::non_retryable("edge_topic required for kafka mode".to_string())
-    })?;
+    let topic = ctx
+        .config
+        .edge_topic
+        .as_deref()
+        .ok_or_else(|| DeliveryError::non_retryable("edge_topic required for kafka mode".to_string()))?;
 
     let key = item
         .payload
@@ -249,8 +242,8 @@ async fn deliver_kafka(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let payload = serde_json::to_string(&item.payload)
-        .map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
+    let payload =
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     let record = FutureRecord::to(topic).key(&key).payload(&payload);
 
@@ -268,9 +261,11 @@ async fn deliver_mqtt(
     ack_notify: &tokio::sync::Notify,
     item: &EdgeConnectorItem,
 ) -> Result<(), DeliveryError> {
-    let topic = ctx.config.edge_topic.as_deref().ok_or_else(|| {
-        DeliveryError::non_retryable("edge_topic required for mqtt mode".to_string())
-    })?;
+    let topic = ctx
+        .config
+        .edge_topic
+        .as_deref()
+        .ok_or_else(|| DeliveryError::non_retryable("edge_topic required for mqtt mode".to_string()))?;
 
     let qos = match ctx.config.mqtt_qos {
         0 => rumqttc::QoS::AtMostOnce,
@@ -278,8 +273,8 @@ async fn deliver_mqtt(
         _ => rumqttc::QoS::ExactlyOnce,
     };
 
-    let payload = serde_json::to_vec(&item.payload)
-        .map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
+    let payload =
+        serde_json::to_vec(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     client
         .publish(topic, qos, false, payload)
@@ -289,33 +284,28 @@ async fn deliver_mqtt(
     if ctx.config.mqtt_qos > 0 {
         tokio::time::timeout(Duration::from_secs(10), ack_notify.notified())
             .await
-            .map_err(|_| {
-                DeliveryError::retryable(
-                    "mqtt broker did not acknowledge publish within 10s".to_string(),
-                )
-            })?;
+            .map_err(|_| DeliveryError::retryable("mqtt broker did not acknowledge publish within 10s".to_string()))?;
     }
 
     Ok(())
 }
 
 fn deliver_stdout(item: &EdgeConnectorItem) -> Result<(), DeliveryError> {
-    let payload = serde_json::to_string(&item.payload)
-        .map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
+    let payload =
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
     println!("{}", payload);
     Ok(())
 }
 
-async fn deliver_script(
-    ctx: &DaemonContext,
-    item: &EdgeConnectorItem,
-) -> Result<(), DeliveryError> {
+async fn deliver_script(ctx: &DaemonContext, item: &EdgeConnectorItem) -> Result<(), DeliveryError> {
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
 
-    let script = ctx.config.edge_script.as_ref().ok_or_else(|| {
-        DeliveryError::non_retryable("edge_script is required for script mode".to_string())
-    })?;
+    let script = ctx
+        .config
+        .edge_script
+        .as_ref()
+        .ok_or_else(|| DeliveryError::non_retryable("edge_script is required for script mode".to_string()))?;
 
     let event_type = item
         .payload
@@ -333,8 +323,8 @@ async fn deliver_script(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let payload = serde_json::to_string(&item.payload)
-        .map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
+    let payload =
+        serde_json::to_string(&item.payload).map_err(|e| DeliveryError::non_retryable(format!("serialize failed: {}", e)))?;
 
     let mut child = Command::new(script)
         .stdin(std::process::Stdio::piped())
@@ -346,30 +336,24 @@ async fn deliver_script(
         .map_err(|e| DeliveryError::retryable(format!("failed to spawn script: {}", e)))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(payload.as_bytes()).await.map_err(|e| {
-            DeliveryError::retryable(format!("failed to write to script stdin: {}", e))
-        })?;
+        stdin
+            .write_all(payload.as_bytes())
+            .await
+            .map_err(|e| DeliveryError::retryable(format!("failed to write to script stdin: {}", e)))?;
     }
 
     let status = match tokio::time::timeout(Duration::from_secs(30), child.wait()).await {
-        Ok(result) => {
-            result.map_err(|e| DeliveryError::retryable(format!("script wait failed: {}", e)))?
-        }
+        Ok(result) => result.map_err(|e| DeliveryError::retryable(format!("script wait failed: {}", e)))?,
         Err(_) => {
             let _ = child.kill().await;
-            return Err(DeliveryError::retryable(
-                "script execution timed out (30s)".to_string(),
-            ));
+            return Err(DeliveryError::retryable("script execution timed out (30s)".to_string()));
         }
     };
 
     if status.success() {
         Ok(())
     } else {
-        Err(DeliveryError::retryable(format!(
-            "script exited with code {:?}",
-            status.code()
-        )))
+        Err(DeliveryError::retryable(format!("script exited with code {:?}", status.code())))
     }
 }
 
@@ -425,9 +409,7 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
                 panic!("--edge_http_url is required when edge_mode is 'http'");
             }
             if config.edge_http_auth_header.is_some() && config.edge_http_auth_value.is_none() {
-                panic!(
-                    "--edge_http_auth_header requires an auth value via --edge_http_auth_value or ILERT_EDGE_HTTP_AUTH_VALUE env var"
-                );
+                panic!("--edge_http_auth_header requires an auth value via --edge_http_auth_value or ILERT_EDGE_HTTP_AUTH_VALUE env var");
             }
         }
         "kafka" => {
