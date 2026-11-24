@@ -508,6 +508,25 @@ async fn fetch_page(
     })
 }
 
+/// Vendor record to event through the configured mappings only, then the same
+/// customDetails defaulting and static enrichment the MQTT/Kafka consumers apply.
+pub fn prepare_vendor_event(
+    config: &ILConfig,
+    record: &Value,
+    source: &str,
+) -> Option<EventQueueItemJson> {
+    let mut event = EventQueueItemJson::from_vendor_record(config, record, source)?;
+    if event.customDetails.is_none() {
+        event.customDetails = Some(if config.forward_message_payload {
+            record.clone()
+        } else {
+            json!({ "source": source })
+        });
+    }
+    crate::consumers::enrich_event(config, &mut event);
+    Some(event)
+}
+
 /// Enqueue one record. Returns true when it was inserted, false when deduped or filtered.
 async fn enqueue_record(
     ctx: &Arc<DaemonContext>,
@@ -516,22 +535,15 @@ async fn enqueue_record(
 ) -> Result<bool, String> {
     let config = &ctx.config;
 
-    let payload = record.to_string();
-    let default_details = json!({ "source": source });
-    let event =
-        match crate::consumers::prepare_consumer_event(config, &payload, source, default_details) {
-            Some(event) => event,
-            None => return Ok(false), // filtered or unparseable, already logged
-        };
+    let event = match prepare_vendor_event(config, record, source) {
+        Some(event) => event,
+        None => return Ok(false), // filtered, already logged
+    };
 
     // No typed api path: pull events post to plain /events, like the event subcommand.
     let db_event = EventQueueItemJson::to_db(event, None);
 
-    let result =
-        ctx.db
-            .lock()
-            .await
-            .create_il_event(&db_event);
+    let result = ctx.db.lock().await.create_il_event(&db_event);
 
     match result {
         Ok(Some(val)) => {

@@ -70,10 +70,7 @@ pub fn enrich_event(config: &ILConfig, event: &mut EventQueueItemJson) {
                 Some((key, value)) => {
                     labels.insert(key, value);
                 }
-                None => warn!(
-                    "Ignoring malformed --label '{}', expected key=value",
-                    token
-                ),
+                None => warn!("Ignoring malformed --label '{}', expected key=value", token),
             }
         }
         if !labels.is_empty() {
@@ -249,7 +246,11 @@ mod tests {
     #[test]
     fn enrich_malformed_label_skipped() {
         let mut config = ILConfig::new();
-        config.static_labels = vec!["noequals".to_string(), "=novalue".to_string(), "ok=1".to_string()];
+        config.static_labels = vec![
+            "noequals".to_string(),
+            "=novalue".to_string(),
+            "ok=1".to_string(),
+        ];
         let mut event = empty_event();
         enrich_event(&config, &mut event);
         let labels = event.labels.unwrap();
@@ -309,8 +310,11 @@ mod tests {
     #[test]
     fn enrich_bad_service_id_skipped() {
         let mut config = ILConfig::new();
-        config.static_services =
-            vec!["id=notanumber".to_string(), "bogus".to_string(), "id=5".to_string()];
+        config.static_services = vec![
+            "id=notanumber".to_string(),
+            "bogus".to_string(),
+            "id=5".to_string(),
+        ];
         let mut event = empty_event();
         enrich_event(&config, &mut event);
         let services = event.services.unwrap();

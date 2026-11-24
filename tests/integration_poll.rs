@@ -455,7 +455,11 @@ async fn send_event_includes_labels_severity_routing_services_in_body() {
     let should_retry = send_queued_event(&ilert_client, &event).await;
     assert!(!should_retry, "202 should not retry");
 
-    let body = captured.lock().unwrap().clone().expect("request body captured");
+    let body = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("request body captured");
     assert_eq!(body["labels"]["env"], "prod");
     assert_eq!(body["labels"]["dc"], "eu");
     assert_eq!(body["severity"], 3);
@@ -491,9 +495,22 @@ async fn send_event_unset_new_fields_serialize_null() {
     let should_retry = send_queued_event(&ilert_client, &alert_event()).await;
     assert!(!should_retry);
 
-    let body = captured.lock().unwrap().clone().expect("request body captured");
+    let body = captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("request body captured");
     assert!(body["labels"].is_null(), "labels should be null when unset");
-    assert!(body["severity"].is_null(), "severity should be null when unset");
-    assert!(body["routingKey"].is_null(), "routingKey should be null when unset");
-    assert!(body["services"].is_null(), "services should be null when unset");
+    assert!(
+        body["severity"].is_null(),
+        "severity should be null when unset"
+    );
+    assert!(
+        body["routingKey"].is_null(),
+        "routingKey should be null when unset"
+    );
+    assert!(
+        body["services"].is_null(),
+        "services should be null when unset"
+    );
 }

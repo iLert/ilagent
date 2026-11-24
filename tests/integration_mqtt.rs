@@ -1419,7 +1419,8 @@ async fn mqtt_event_with_labels_severity_routing_services() {
     assert_eq!(event.routing_key.as_ref().unwrap(), "team-alpha");
 
     // services: payload alias=web plus static alias=db appended
-    let services: serde_json::Value = serde_json::from_str(event.services.as_ref().unwrap()).unwrap();
+    let services: serde_json::Value =
+        serde_json::from_str(event.services.as_ref().unwrap()).unwrap();
     let aliases: Vec<&str> = services
         .as_array()
         .unwrap()

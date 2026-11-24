@@ -531,12 +531,7 @@ const EDGE_REJECTED_FLAG_ARGS: &[&str] = &["forward_message_payload", "mqtt_buff
 
 // Repeatable (ArgAction::Append) consumer args — get_one would miss these, so they
 // need a get_many presence check in the edge-mode rejection loop.
-const EDGE_REJECTED_MULTI_ARGS: &[&str] = &[
-    "label",
-    "map_key_label",
-    "service",
-    "pull_header",
-];
+const EDGE_REJECTED_MULTI_ARGS: &[&str] = &["label", "map_key_label", "service", "pull_header"];
 
 pub fn build_daemon_config(matches: &ArgMatches, global_matches: &ArgMatches) -> ILConfig {
     let mut config = ILConfig::new();
@@ -1793,7 +1788,10 @@ mod tests {
             config.static_labels,
             vec!["env=prod".to_string(), "dc=eu-central-1".to_string()]
         );
-        assert_eq!(config.map_key_labels, vec!["region=data.region".to_string()]);
+        assert_eq!(
+            config.map_key_labels,
+            vec!["region=data.region".to_string()]
+        );
         assert_eq!(
             config.static_services,
             vec!["alias=web-frontend".to_string(), "id=123".to_string()]
@@ -1878,7 +1876,12 @@ mod tests {
     fn daemon_config_enrichment_ignored_without_event_path() {
         let m = build_cli()
             .try_get_matches_from(vec![
-                "ilagent", "daemon", "--label", "env=prod", "--severity", "4",
+                "ilagent",
+                "daemon",
+                "--label",
+                "env=prod",
+                "--severity",
+                "4",
             ])
             .unwrap();
         let sub = m.subcommand_matches("daemon").unwrap();
@@ -2134,10 +2137,16 @@ mod tests {
                 .unwrap();
             let sub = m.subcommand_matches("daemon").unwrap();
             let config = build_daemon_config(sub, &m);
-            assert_eq!(config.edge_connector_key.as_deref().unwrap(), "iec1:test-key");
+            assert_eq!(
+                config.edge_connector_key.as_deref().unwrap(),
+                "iec1:test-key"
+            );
             assert_eq!(config.edge_poll_interval, 10);
             assert_eq!(config.edge_mode.as_deref().unwrap(), "http");
-            assert_eq!(config.edge_http_url.unwrap(), "http://localhost:8080/webhook");
+            assert_eq!(
+                config.edge_http_url.unwrap(),
+                "http://localhost:8080/webhook"
+            );
             assert!(config.edge_http_method.is_none());
             assert!(config.edge_topic.is_none());
             assert!(config.edge_script.is_none());
@@ -2193,12 +2202,7 @@ mod tests {
 
         {
             let m = build_cli()
-                .try_get_matches_from(vec![
-                    "ilagent",
-                    "daemon",
-                    "--edge_mode",
-                    "stdout",
-                ])
+                .try_get_matches_from(vec!["ilagent", "daemon", "--edge_mode", "stdout"])
                 .unwrap();
             let sub = m.subcommand_matches("daemon").unwrap();
             let config = build_daemon_config(sub, &m);
@@ -2336,7 +2340,12 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "kafka", "--edge_topic", "test",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "kafka",
+                        "--edge_topic",
+                        "test",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2363,8 +2372,14 @@ mod tests {
         {
             let m = build_cli()
                 .try_get_matches_from(vec![
-                    "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                    "http://localhost/webhook", "-p", "8080",
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "http",
+                    "--edge_http_url",
+                    "http://localhost/webhook",
+                    "-p",
+                    "8080",
                 ])
                 .unwrap();
             let sub = m.subcommand_matches("daemon").unwrap();
@@ -2377,8 +2392,14 @@ mod tests {
         {
             let m = build_cli()
                 .try_get_matches_from(vec![
-                    "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                    "http://localhost/webhook", "-b", "hbt-key",
+                    "ilagent",
+                    "daemon",
+                    "--edge_mode",
+                    "http",
+                    "--edge_http_url",
+                    "http://localhost/webhook",
+                    "-b",
+                    "hbt-key",
                 ])
                 .unwrap();
             let sub = m.subcommand_matches("daemon").unwrap();
@@ -2391,15 +2412,27 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "mqtt", "-m", "broker.local",
-                        "--edge_topic", "edge-events", "-e", "ilert/events",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "mqtt",
+                        "-m",
+                        "broker.local",
+                        "--edge_topic",
+                        "edge-events",
+                        "-e",
+                        "ilert/events",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
                 build_daemon_config(sub, &m);
             });
             let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            assert!(
+                msg.contains("cannot be used with --edge_mode"),
+                "got: {}",
+                msg
+            );
         }
 
         // rejects policy topic
@@ -2407,15 +2440,25 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--policy_topic", "policies",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--policy_topic",
+                        "policies",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
                 build_daemon_config(sub, &m);
             });
             let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            assert!(
+                msg.contains("cannot be used with --edge_mode"),
+                "got: {}",
+                msg
+            );
         }
 
         // kafka requires edge topic
@@ -2423,7 +2466,11 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "kafka", "--kafka_brokers",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "kafka",
+                        "--kafka_brokers",
                         "localhost:9092",
                     ])
                     .unwrap();
@@ -2439,7 +2486,12 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "mqtt", "-m", "broker.local",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "mqtt",
+                        "-m",
+                        "broker.local",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2454,8 +2506,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--map_key_email", "user.email",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--map_key_email",
+                        "user.email",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2469,8 +2527,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--max_retries", "50",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--max_retries",
+                        "50",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2484,15 +2548,25 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--label", "env=prod",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--label",
+                        "env=prod",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
                 build_daemon_config(sub, &m);
             });
             let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            assert!(
+                msg.contains("cannot be used with --edge_mode"),
+                "got: {}",
+                msg
+            );
         }
 
         // rejects repeatable --service
@@ -2500,15 +2574,25 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--service", "alias=web",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--service",
+                        "alias=web",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
                 build_daemon_config(sub, &m);
             });
             let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            assert!(
+                msg.contains("cannot be used with --edge_mode"),
+                "got: {}",
+                msg
+            );
         }
 
         // rejects --map_key_severity
@@ -2516,15 +2600,25 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--map_key_severity", "data.sev",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--map_key_severity",
+                        "data.sev",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
                 build_daemon_config(sub, &m);
             });
             let msg = panic_message(result.unwrap_err());
-            assert!(msg.contains("cannot be used with --edge_mode"), "got: {}", msg);
+            assert!(
+                msg.contains("cannot be used with --edge_mode"),
+                "got: {}",
+                msg
+            );
         }
 
         // rejects edge_poll_interval below 5
@@ -2532,8 +2626,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--edge_poll_interval", "2",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--edge_poll_interval",
+                        "2",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2548,8 +2648,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--edge_poll_interval", "300",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--edge_poll_interval",
+                        "300",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2564,8 +2670,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--edge_standby_interval", "1",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--edge_standby_interval",
+                        "1",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2580,8 +2692,14 @@ mod tests {
             let result = std::panic::catch_unwind(|| {
                 let m = build_cli()
                     .try_get_matches_from(vec![
-                        "ilagent", "daemon", "--edge_mode", "http", "--edge_http_url",
-                        "http://localhost/webhook", "--edge_standby_interval", "200",
+                        "ilagent",
+                        "daemon",
+                        "--edge_mode",
+                        "http",
+                        "--edge_http_url",
+                        "http://localhost/webhook",
+                        "--edge_standby_interval",
+                        "200",
                     ])
                     .unwrap();
                 let sub = m.subcommand_matches("daemon").unwrap();
@@ -2608,12 +2726,8 @@ mod tests {
 
     #[test]
     fn cli_edge_mode_rejects_invalid_value() {
-        let result = build_cli().try_get_matches_from(vec![
-            "ilagent",
-            "daemon",
-            "--edge_mode",
-            "ftp",
-        ]);
+        let result =
+            build_cli().try_get_matches_from(vec!["ilagent", "daemon", "--edge_mode", "ftp"]);
         assert!(result.is_err());
     }
 

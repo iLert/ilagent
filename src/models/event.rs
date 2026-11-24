@@ -29,7 +29,7 @@ pub struct EventQueueItemJson {
 helper to apply additional consumer mappings easier
 */
 #[allow(non_snake_case)]
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct EventQueueTransitionItemJson {
     #[serde(alias = "apiKey")]
     pub integrationKey: Option<String>,
@@ -220,8 +220,32 @@ impl EventQueueItemJson {
             );
             return None;
         }
-        let mut parsed = parsed.unwrap();
+        Self::apply_mappings(config, &json, parsed.unwrap(), topic)
+    }
 
+    /// Build an event from an arbitrary vendor record. Nothing from the record reaches the
+    /// event except through a configured mapping, so vendor fields that share a name with
+    /// ilert fields (`priority`, `details`, `eventType`, ...) are ignored.
+    pub fn from_vendor_record(
+        config: &ILConfig,
+        json: &serde_json::Value,
+        source: &str,
+    ) -> Option<EventQueueItemJson> {
+        Self::apply_mappings(
+            config,
+            json,
+            EventQueueTransitionItemJson::default(),
+            source,
+        )
+    }
+
+    /// Filter check, event_key override and map_key_* mappings on top of `parsed`.
+    pub fn apply_mappings(
+        config: &ILConfig,
+        json: &serde_json::Value,
+        mut parsed: EventQueueTransitionItemJson,
+        topic: &str,
+    ) -> Option<EventQueueItemJson> {
         // event filter check
         if let Some(ref filter_key) = config.filter_key {
             let val_opt = json.get(filter_key);
@@ -264,7 +288,7 @@ impl EventQueueItemJson {
         // mappings
 
         if let Some(ref map_key_alert_key) = config.map_key_alert_key {
-            if let Some(val) = get_nested_value(&json, map_key_alert_key) {
+            if let Some(val) = get_nested_value(json, map_key_alert_key) {
                 match val.as_str() {
                     Some(s) => parsed.alertKey = Some(s.to_string()),
                     None => warn!(
@@ -276,7 +300,7 @@ impl EventQueueItemJson {
         }
 
         if let Some(ref map_key_summary) = config.map_key_summary {
-            if let Some(val) = get_nested_value(&json, map_key_summary) {
+            if let Some(val) = get_nested_value(json, map_key_summary) {
                 match val.as_str() {
                     Some(s) => parsed.summary = Some(s.to_string()),
                     None => warn!(
@@ -289,7 +313,7 @@ impl EventQueueItemJson {
 
         let mut event_type = "".to_string();
         if let Some(ref map_key_etype) = config.map_key_etype {
-            if let Some(val) = get_nested_value(&json, map_key_etype) {
+            if let Some(val) = get_nested_value(json, map_key_etype) {
                 match val.as_str() {
                     Some(s) => {
                         event_type = s.to_string();
@@ -341,7 +365,7 @@ impl EventQueueItemJson {
                     );
                     continue;
                 }
-                if let Some(val) = get_nested_value(&json, path) {
+                if let Some(val) = get_nested_value(json, path) {
                     match val.as_str() {
                         Some(s) => {
                             labels.insert(name.to_string(), s.to_string());
@@ -361,7 +385,7 @@ impl EventQueueItemJson {
         // a configured mapped source is authoritative: an invalid value at the path clears
         // severity rather than falling back to the payload-native value
         if let Some(ref map_key_severity) = config.map_key_severity {
-            if let Some(val) = get_nested_value(&json, map_key_severity) {
+            if let Some(val) = get_nested_value(json, map_key_severity) {
                 let extracted = match val {
                     serde_json::Value::Number(n) => n.as_i64(),
                     serde_json::Value::String(s) => s.parse::<i64>().ok(),
@@ -396,7 +420,7 @@ impl EventQueueItemJson {
         }
 
         if let Some(ref map_key_routing_key) = config.map_key_routing_key {
-            if let Some(val) = get_nested_value(&json, map_key_routing_key) {
+            if let Some(val) = get_nested_value(json, map_key_routing_key) {
                 match val.as_str() {
                     Some(s) => parsed.routingKey = Some(s.to_string()),
                     None => warn!(

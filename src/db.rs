@@ -167,7 +167,10 @@ impl ILDatabase {
         let mig_7 = self.get_il_value(DB_MIGRATION_V7);
         if mig_7.is_none() {
             self.conn
-                .execute("ALTER TABLE event_items ADD COLUMN severity INTEGER NULL", [])
+                .execute(
+                    "ALTER TABLE event_items ADD COLUMN severity INTEGER NULL",
+                    [],
+                )
                 .expect("Database migration failed (v7)");
 
             self.set_il_val(DB_MIGRATION_V7, DB_MIGRATION_VAL)
@@ -178,7 +181,10 @@ impl ILDatabase {
         let mig_8 = self.get_il_value(DB_MIGRATION_V8);
         if mig_8.is_none() {
             self.conn
-                .execute("ALTER TABLE event_items ADD COLUMN routing_key TEXT NULL", [])
+                .execute(
+                    "ALTER TABLE event_items ADD COLUMN routing_key TEXT NULL",
+                    [],
+                )
                 .expect("Database migration failed (v8)");
 
             self.set_il_val(DB_MIGRATION_V8, DB_MIGRATION_VAL)
