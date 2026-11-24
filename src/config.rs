@@ -39,7 +39,6 @@ pub struct ILConfig {
     pub map_key_labels: Vec<String>,
     pub severity: Option<i32>,
     pub map_key_severity: Option<String>,
-    pub map_val_severity: Vec<String>,
     pub map_key_routing_key: Option<String>,
     pub static_services: Vec<String>,
 
@@ -128,7 +127,6 @@ impl ILConfig {
             map_key_labels: Vec::new(),
             severity: None,
             map_key_severity: None,
-            map_val_severity: Vec::new(),
             map_key_routing_key: None,
             static_services: Vec::new(),
             filter_key: None,

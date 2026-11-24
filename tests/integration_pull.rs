@@ -112,33 +112,6 @@ async fn pull_fetches_and_enqueues_records() {
 }
 
 #[tokio::test]
-async fn pull_dedups_repeated_snapshot() {
-    let server = MockServer::start().await;
-
-    // A snapshot source hands back the same open alerts on every poll.
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "items": [{"id": "same-1", "name": "Still broken"}]
-        })))
-        .mount(&server)
-        .await;
-
-    let mut config = build_pull_config(&server.uri(), "snapshot");
-    config.pull_items_path = Some("items".to_string());
-    config.pull_dedup_key = Some("id".to_string());
-
-    let ctx = build_ctx(config);
-    run_cycles(ctx.clone(), 3).await;
-
-    let events = queued_events(&ctx).await;
-    assert_eq!(
-        events.len(),
-        1,
-        "the same record must only be enqueued once across polls"
-    );
-}
-
-#[tokio::test]
 async fn pull_without_dedup_key_re_enqueues_every_cycle() {
     let server = MockServer::start().await;
 
@@ -487,55 +460,6 @@ async fn pull_applies_backpressure_when_queue_is_deep() {
 
     run_cycles(ctx.clone(), 2).await;
     // wiremock verifies .expect(0) on drop
-}
-
-#[tokio::test]
-async fn pull_maps_word_severity_from_sophos_shaped_record() {
-    let server = MockServer::start().await;
-
-    // Sophos-shaped: severity is a word on the key that collides with ilert's own
-    Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "items": [
-                {"id": "s1", "name": "Malware detected", "severity": "high",
-                 "type": "Event::Endpoint::Threat::Detected"},
-                {"id": "s2", "name": "Policy changed", "severity": "low",
-                 "type": "Event::Endpoint::UpdateSuccess"}
-            ]
-        })))
-        .mount(&server)
-        .await;
-
-    let mut config = build_pull_config(&server.uri(), "sophos-shaped");
-    config.pull_items_path = Some("items".to_string());
-    config.pull_dedup_key = Some("id".to_string());
-    config.map_key_summary = Some("name".to_string());
-    config.map_key_alert_key = Some("id".to_string());
-    config.map_key_severity = Some("severity".to_string());
-    config.map_val_severity = vec![
-        "high=2".to_string(),
-        "medium=3".to_string(),
-        "low=4".to_string(),
-    ];
-
-    let ctx = build_ctx(config);
-    run_cycles(ctx.clone(), 1).await;
-
-    let events = queued_events(&ctx).await;
-    assert_eq!(
-        events.len(),
-        2,
-        "a word severity must not cause the record to be discarded during deserialize"
-    );
-
-    let mut by_key: Vec<(String, Option<i64>)> = events
-        .iter()
-        .map(|e| (e.alert_key.clone().unwrap_or_default(), e.severity))
-        .collect();
-    by_key.sort();
-
-    assert_eq!(by_key[0], ("s1".to_string(), Some(2)));
-    assert_eq!(by_key[1], ("s2".to_string(), Some(4)));
 }
 
 /// reqwest::Error's Display renders the full url, and that string reaches both the

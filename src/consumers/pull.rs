@@ -516,41 +516,6 @@ async fn enqueue_record(
 ) -> Result<bool, String> {
     let config = &ctx.config;
 
-    let dedup_key = match config.pull_dedup_key {
-        Some(ref path) => match lookup_path(record, path) {
-            Some(Value::String(s)) => Some(s.clone()),
-            Some(Value::Number(n)) => Some(n.to_string()),
-            Some(other) => {
-                warn!(
-                    "pull dedup key '{}' matched an unusable value: {:?}, record will not be deduped",
-                    path, other
-                );
-                None
-            }
-            None => {
-                warn!(
-                    "pull dedup key '{}' missing from record, record will not be deduped",
-                    path
-                );
-                None
-            }
-        },
-        None => None,
-    };
-
-    if let Some(ref key) = dedup_key {
-        let seen = ctx
-            .db
-            .lock()
-            .await
-            .pull_dedup_seen(source, key)
-            .map_err(|e| format!("dedup lookup failed: {}", e))?;
-        if seen {
-            debug!("Skipping already-seen record {} from '{}'", key, source);
-            return Ok(false);
-        }
-    }
-
     let payload = record.to_string();
     let default_details = json!({ "source": source });
     let event =
@@ -566,7 +531,7 @@ async fn enqueue_record(
         ctx.db
             .lock()
             .await
-            .create_il_event_deduped(&db_event, source, dedup_key.as_deref());
+            .create_il_event(&db_event);
 
     match result {
         Ok(Some(val)) => {
@@ -834,10 +799,6 @@ pub async fn run_pull_job(ctx: Arc<DaemonContext>) {
                 }
                 if count > 0 {
                     info!("Pull source '{}' enqueued {} events", source, count);
-                }
-
-                if let Err(e) = ctx.db.lock().await.pull_dedup_sweep(DEDUP_TTL_SECS) {
-                    warn!("Failed to sweep pull dedup table: {}", e);
                 }
             }
             Err(e) => {
