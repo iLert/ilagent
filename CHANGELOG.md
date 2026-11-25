@@ -2,7 +2,7 @@
 
 ## YYYY-MM-DD, Version 0.12.0
 
-* added **pull connector** (`--pull_url`): polls an HTTP endpoint on a timer (`--pull_interval`, default 60, range 10–3600) and maps each returned record to an ilert event, for APIs that offer no webhooks such as Sophos Central. Events land in the same SQLite queue as MQTT/Kafka events and keep its retry and offline buffering. See docs/pull.md
+* added **pull connector** (`--pull_url`): polls an HTTP endpoint on a timer (`--pull_interval`, default 60, range 10–3600) and maps each returned record to an ilert event, for APIs that offer no webhooks such as Sophos Central. Events land in the same SQLite queue as MQTT/Kafka events and keep its retry and offline buffering
 * `--pull_items_path` locates the record array in the response; a path missing from the response fails the cycle, so an API error body cannot pass as an empty poll
 * `--pull_header KEY=VALUE` (repeatable) sends static headers, e.g. a tenant id or an API key
 * `--pull_cursor PATH=PARAM` enables token paging: up to 10 pages per cycle, with the cursor stored only after all records of its page are queued. Without it, every poll sends the full snapshot
