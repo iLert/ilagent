@@ -9,7 +9,10 @@
 #       -d "grant_type=client_credentials&scope=token&client_id=$CID&client_secret=$SECRET" \
 #       | jq -r .access_token)
 #   curl -s -H "Authorization: Bearer $TOKEN" https://api.central.sophos.com/whoami/v1
-#   # => { "id": "<tenant-id>", "apiHosts": { "dataRegion": "https://api-eu01..." } }
+#   # => { "id": "<tenant-id>", "idType": "tenant", "apiHosts": { "dataRegion": "https://api-eu01..." } }
+#
+# This assumes tenant credentials (idType "tenant"). Partner and organization credentials
+# return their own id, not a tenant id.
 
 # The secret is passed inline rather than exported, so it stays out of the rest of the
 # shell session and out of the process list.
@@ -31,10 +34,15 @@ ILERT_PULL_OAUTH_SECRET='<sophos client secret>' ilagent daemon -v \
 # again after a failed cycle). --forward_message_payload carries the rest of the record
 # (type, severity, location, when) into customDetails for ilert's event templating.
 #
+# Sophos keeps 24 hours of data. A cursor older than that falls back to the last 24 hours,
+# so events from a longer outage of the agent are not fetched.
+#
 # Sophos exposes alerts on a second endpoint. Run it as its own agent with its own --file;
-# the stored cursor is keyed by the url path, so the two never share one:
+# the stored cursor is keyed by the url path, so the two never share one. Alerts carry
+# their text in `description` instead of `name`:
 #
 # ILERT_PULL_OAUTH_SECRET='<sophos client secret>' ilagent daemon -v \
 #     --file ./ilagent-sophos-alerts.db3 \
 #     --pull_url https://api-eu01.central.sophos.com/siem/v1/alerts \
-#     ... same flags ...
+#     --map_key_summary description \
+#     ... other flags as above ...
