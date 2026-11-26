@@ -5,7 +5,7 @@ use std::time::Duration;
 use log::{debug, error, info, warn};
 use serde::Deserialize;
 
-use crate::DaemonContext;
+use crate::{DaemonContext, interruptible_sleep};
 const DEFAULT_LIMIT: i64 = 100;
 const DEFAULT_API_HOST: &str = "https://api.ilert.com";
 pub const MAX_CONSECUTIVE_REPOLLS: u32 = 10;
@@ -438,15 +438,6 @@ pub fn validate_edge_config(config: &crate::config::ILConfig) {
             "Unknown edge_mode '{}', expected: http, kafka, mqtt, script, stdout",
             mode
         ),
-    }
-}
-
-async fn interruptible_sleep(ctx: &Arc<DaemonContext>, secs: u64) {
-    for _ in 0..secs {
-        if !ctx.running.load(Ordering::Relaxed) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 

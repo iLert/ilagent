@@ -9,7 +9,9 @@ use tokio::sync::Mutex;
 use ilagent::config::ILConfig;
 use ilagent::db::ILDatabase;
 use ilagent::http_server::{WebContextContainer, config_app};
-use ilagent::{DaemonContext, EdgeConnectorProbeState, KafkaProbeState, MqttProbeState};
+use ilagent::{
+    DaemonContext, EdgeConnectorProbeState, KafkaProbeState, MqttProbeState, PullProbeState,
+};
 
 fn test_container() -> (web::Data<Mutex<WebContextContainer>>, NamedTempFile) {
     let file = NamedTempFile::new().unwrap();
@@ -285,13 +287,14 @@ fn test_daemon_ctx_full(
     web::Data<Arc<DaemonContext>>,
     NamedTempFile,
 ) {
-    test_daemon_ctx_all(mqtt_probe, kafka_probe, None)
+    test_daemon_ctx_all(mqtt_probe, kafka_probe, None, None)
 }
 
 fn test_daemon_ctx_all(
     mqtt_probe: Option<MqttProbeState>,
     kafka_probe: Option<KafkaProbeState>,
     edge_connector_probe: Option<EdgeConnectorProbeState>,
+    pull_probe: Option<PullProbeState>,
 ) -> (
     web::Data<Mutex<WebContextContainer>>,
     web::Data<Arc<DaemonContext>>,
@@ -318,6 +321,7 @@ fn test_daemon_ctx_all(
         mqtt_probe,
         kafka_probe,
         edge_connector_probe,
+        pull_probe,
     });
 
     (container, web::Data::new(daemon_ctx), file)
@@ -616,7 +620,7 @@ async fn ready_returns_503_edge_connector_with_error() {
     let probe = EdgeConnectorProbeState::new();
     probe.polling.store(true, Ordering::Relaxed);
     probe.record_error("authentication failed — check integration key".to_string());
-    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe));
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe), None);
 
     let app = test::init_service(
         App::new()
@@ -638,7 +642,80 @@ async fn ready_returns_503_edge_connector_with_error() {
 async fn ready_returns_204_edge_connector_healthy() {
     let probe = EdgeConnectorProbeState::new();
     probe.polling.store(true, Ordering::Relaxed);
-    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe));
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, Some(probe), None);
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 204);
+}
+
+/// polling is set as the loop is entered; before that the source was never reached.
+#[actix_rt::test]
+async fn ready_returns_503_pull_before_first_cycle() {
+    let probe = PullProbeState::new();
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "pull");
+    assert_eq!(body["polling"], false);
+}
+
+#[actix_rt::test]
+async fn ready_returns_503_pull_with_error() {
+    let probe = PullProbeState::new();
+    probe.polling.store(true, Ordering::Relaxed);
+    probe.record_error("pull request failed: connection refused".to_string());
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, None, Some(probe));
+
+    let app = test::init_service(
+        App::new()
+            .app_data(container.clone())
+            .app_data(daemon_data.clone())
+            .configure(config_app),
+    )
+    .await;
+
+    let req = test::TestRequest::get().uri("/ready").to_request();
+    let resp = test::call_service(&app, req).await;
+    assert_eq!(resp.status(), 503);
+
+    let body: serde_json::Value = test::read_body_json(resp).await;
+    assert_eq!(body["component"], "pull");
+    assert_eq!(
+        body["polling"], true,
+        "a failing cycle is still a polling connector — the error is what makes it unready"
+    );
+    assert_eq!(body["error"], "pull request failed: connection refused");
+}
+
+/// Readiness must not be satisfiable by always reporting 503.
+#[actix_rt::test]
+async fn ready_returns_204_pull_healthy_after_error_cleared() {
+    let probe = PullProbeState::new();
+    probe.polling.store(true, Ordering::Relaxed);
+    probe.record_error("transient blip".to_string());
+    probe.clear_error();
+    let (container, daemon_data, _f) = test_daemon_ctx_all(None, None, None, Some(probe));
 
     let app = test::init_service(
         App::new()
@@ -681,6 +758,7 @@ async fn post_event_applies_static_enrichment() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let daemon_data = web::Data::new(daemon_ctx);
 

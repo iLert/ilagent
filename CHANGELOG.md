@@ -1,5 +1,19 @@
 # ilagent CHANGELOG
 
+## YYYY-MM-DD, Version 0.12.0
+
+* added **pull connector** (`--pull_url`): polls an HTTP endpoint on a timer (`--pull_interval`, default 60, range 10–3600) and maps each returned record to an ilert event, for APIs that offer no webhooks such as Sophos Central. Events land in the same SQLite queue as MQTT/Kafka events and keep its retry and offline buffering
+* `--pull_items_path` locates the record array in the response; a path missing from the response fails the cycle, so an API error body cannot pass as an empty poll
+* `--pull_header KEY=VALUE` (repeatable) sends static headers, e.g. a tenant id or an API key
+* `--pull_cursor PATH=PARAM` enables token paging: up to 10 pages per cycle, with the cursor stored only after all records of its page are queued. Without it, every poll sends the full snapshot
+* oauth2 client credentials via `--pull_oauth_url`, `--pull_oauth_client_id`, `--pull_oauth_scope` and the `ILERT_PULL_OAUTH_SECRET` env var; the token is cached, refreshed before expiry and re-fetched once on a 401/403
+* records are mapped only through the existing `--map_key_*` flags, so vendor fields named like ilert fields (`eventType`, `priority`, ...) are ignored; `--event_key` and `--map_key_alert_key` are required, ilert deduplicates re-delivered records by alert key
+* the pull url is never logged or included in errors, redirects are followed only within the same origin, and responses are capped at 10 MB
+* the pull connector skips fetching while 5000 events are queued and backs off exponentially on failure
+* `/ready` reports pull connector health when `--port` is used alongside `--pull_url`
+* `--pull_url` is rejected together with `--mqtt_host`, `--kafka_brokers` or `--edge_mode`
+* `DaemonContext` gained a `pull_probe` field and `ILConfig` gained `pull_*` fields; only relevant to code that builds them as struct literals
+
 ## 2026-06-11, Version 0.11.0
 
 * added support for four additional ilert event fields — `labels`, `severity`, `routingKey`, and `services` — wired end-to-end through the MQTT/Kafka consumers and the HTTP `POST /api/events` endpoint

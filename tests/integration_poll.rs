@@ -337,6 +337,7 @@ async fn event_poll_max_retries_drops_event() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();
@@ -398,6 +399,7 @@ async fn event_poll_unlimited_retries_keeps_event() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
 
     let poll_ctx = daemon_ctx.clone();

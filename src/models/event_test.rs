@@ -591,4 +591,148 @@ mod tests {
         assert_eq!(restored_services[0].alias.as_ref().unwrap(), "web");
         assert_eq!(restored_services[1].id.unwrap(), 7);
     }
+
+    // --- pinned MQTT/Kafka behaviour: parse_event_json must not change for existing sources ---
+
+    #[test]
+    fn pin_string_native_severity_drops_event() {
+        // `severity` is a strict integer on the transition struct, so a word fails deserialize
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": "high"}"#;
+        assert!(EventQueueItemJson::parse_event_json(&config, payload, "t1").is_none());
+    }
+
+    #[test]
+    fn pin_string_native_severity_drops_event_even_with_map_key_severity() {
+        let mut config = default_config();
+        config.map_key_severity = Some("level".to_string());
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": "high", "level": 2}"#;
+        assert!(EventQueueItemJson::parse_event_json(&config, payload, "t1").is_none());
+    }
+
+    #[test]
+    fn pin_numeric_native_severity_passes() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "summary": "s", "severity": 4}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.severity, Some(4));
+    }
+
+    #[test]
+    fn pin_ilert_shaped_fields_with_vendor_types_drop_event() {
+        let config = default_config();
+        for payload in [
+            r#"{"apiKey": "k1", "summary": "s", "priority": 1}"#,
+            r#"{"apiKey": "k1", "summary": "s", "details": {}}"#,
+            r#"{"apiKey": "k1", "summary": "s", "labels": ["a"]}"#,
+        ] {
+            assert!(
+                EventQueueItemJson::parse_event_json(&config, payload, "t1").is_none(),
+                "{} must still be dropped",
+                payload
+            );
+        }
+    }
+
+    #[test]
+    fn pin_native_fields_pass_through_unmapped() {
+        let config = default_config();
+        let payload = r#"{"apiKey": "k1", "eventType": "RESOLVE", "alertKey": "a1", "priority": "LOW", "details": "d", "routingKey": "r"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, payload, "t1").unwrap();
+        assert_eq!(event.integrationKey, "k1");
+        assert_eq!(event.eventType, "RESOLVE");
+        assert_eq!(event.alertKey.as_deref(), Some("a1"));
+        assert_eq!(event.priority.as_deref(), Some("LOW"));
+        assert_eq!(event.details.as_deref(), Some("d"));
+        assert_eq!(event.routingKey.as_deref(), Some("r"));
+        assert_eq!(event.summary, "", "non-ALERT events keep an empty summary");
+    }
+
+    #[test]
+    fn pin_filter_runs_before_event_key_override() {
+        let mut config = default_config();
+        config.event_key = Some("override".to_string());
+        config.filter_key = Some("kind".to_string());
+        config.filter_val = Some("alarm".to_string());
+        let dropped = r#"{"apiKey": "k1", "summary": "s", "kind": "info"}"#;
+        assert!(EventQueueItemJson::parse_event_json(&config, dropped, "t1").is_none());
+        let kept = r#"{"apiKey": "k1", "summary": "s", "kind": "alarm"}"#;
+        let event = EventQueueItemJson::parse_event_json(&config, kept, "t1").unwrap();
+        assert_eq!(event.integrationKey, "override");
+    }
+
+    // --- from_vendor_record: only configured mappings reach the event ---
+
+    fn vendor_record() -> serde_json::Value {
+        serde_json::json!({
+            "id": "rec-1",
+            "name": "Malware detected",
+            "priority": 1,
+            "details": {},
+            "labels": [],
+            "severity": "high",
+            "eventType": "ThreatDetected",
+            "alertKey": "x",
+            "summary": "vendor summary",
+            "routingKey": "vendor-route"
+        })
+    }
+
+    #[test]
+    fn vendor_record_with_conflicting_ilert_fields_is_queued_as_alert() {
+        let mut config = default_config();
+        config.event_key = Some("il1api".to_string());
+        let event =
+            EventQueueItemJson::from_vendor_record(&config, &vendor_record(), "pull").unwrap();
+        assert_eq!(event.integrationKey, "il1api");
+        assert_eq!(
+            event.eventType, "ALERT",
+            "vendor eventType must not reach ilert"
+        );
+        assert_eq!(event.summary, "New alert from pull");
+        assert!(
+            event.alertKey.is_none(),
+            "unmapped alertKey must be ignored"
+        );
+        assert!(event.priority.is_none());
+        assert!(event.details.is_none());
+        assert!(event.labels.is_none());
+        assert!(event.severity.is_none());
+        assert!(event.routingKey.is_none());
+        assert!(event.customDetails.is_none());
+    }
+
+    #[test]
+    fn vendor_record_takes_only_mapped_fields() {
+        let mut config = default_config();
+        config.event_key = Some("il1api".to_string());
+        config.map_key_alert_key = Some("id".to_string());
+        config.map_key_summary = Some("name".to_string());
+        config.map_key_labels = vec!["sev=severity".to_string()];
+        let event =
+            EventQueueItemJson::from_vendor_record(&config, &vendor_record(), "pull").unwrap();
+        assert_eq!(event.alertKey.as_deref(), Some("rec-1"));
+        assert_eq!(event.summary, "Malware detected");
+        assert_eq!(event.labels.unwrap().get("sev").unwrap(), "high");
+        assert_eq!(event.eventType, "ALERT");
+    }
+
+    #[test]
+    fn vendor_record_event_type_comes_from_value_mapping() {
+        let mut config = default_config();
+        config.map_key_etype = Some("state".to_string());
+        config.map_val_etype_resolve = Some("closed".to_string());
+        let record = serde_json::json!({"state": "closed", "eventType": "ALERT"});
+        let event = EventQueueItemJson::from_vendor_record(&config, &record, "pull").unwrap();
+        assert_eq!(event.eventType, "RESOLVE");
+    }
+
+    #[test]
+    fn vendor_record_respects_filter() {
+        let mut config = default_config();
+        config.filter_key = Some("kind".to_string());
+        config.filter_val = Some("alarm".to_string());
+        let record = serde_json::json!({"kind": "info"});
+        assert!(EventQueueItemJson::from_vendor_record(&config, &record, "pull").is_none());
+    }
 }

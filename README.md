@@ -15,6 +15,7 @@ ilagent 🦀 📦 is a lightweight program that lets you easily integrate your o
 * Run a local HTTP proxy server with a retry queue
 * Consume MQTT messages and forward them to ilert
 * Consume Apache Kafka messages and forward them to ilert
+* Poll HTTP APIs that offer no webhooks and forward what they return
 * Map and filter consumer messages to ilert events
 * Sync escalation policy levels from external systems
 

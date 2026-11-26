@@ -393,6 +393,12 @@ impl ILDatabase {
             .execute("DELETE FROM event_items WHERE id = ?1", &[&id])
     }
 
+    /// Queue depth, used by the pull connector for backpressure.
+    pub fn count_il_events(&self) -> Result<i64, rusqlite::Error> {
+        self.conn
+            .query_row("SELECT COUNT(*) FROM event_items", [], |row| row.get(0))
+    }
+
     pub fn create_mqtt_queue_item(
         &self,
         topic: &str,

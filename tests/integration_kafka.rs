@@ -106,6 +106,7 @@ fn kafka_daemon_ctx(
         mqtt_probe: None,
         kafka_probe,
         edge_connector_probe: None,
+        pull_probe: None,
     })
 }
 
@@ -430,6 +431,7 @@ async fn kafka_event_with_config_mappings() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -509,6 +511,7 @@ async fn kafka_event_forward_payload() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -706,6 +709,7 @@ async fn kafka_policy_delivered() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 
@@ -783,6 +787,7 @@ async fn kafka_event_with_labels_severity_routing_services() {
         mqtt_probe: None,
         kafka_probe: None,
         edge_connector_probe: None,
+        pull_probe: None,
     });
     let ctx_clone = daemon_ctx.clone();
 

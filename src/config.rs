@@ -67,6 +67,17 @@ pub struct ILConfig {
     pub edge_api_host: Option<String>,
     pub edge_http_auth_header: Option<String>,
     pub edge_http_auth_value: Option<String>,
+
+    pub pull_url: Option<String>,
+    pub pull_interval: u64,
+    pub pull_items_path: Option<String>,
+    pub pull_headers: Vec<String>,
+    pub pull_cursor_path: Option<String>,
+    pub pull_cursor_param: Option<String>,
+    pub pull_oauth_url: Option<String>,
+    pub pull_oauth_client_id: Option<String>,
+    pub pull_oauth_scope: Option<String>,
+    pub pull_oauth_secret: Option<String>,
 }
 
 impl ILConfig {
@@ -130,6 +141,16 @@ impl ILConfig {
             edge_api_host: None,
             edge_http_auth_header: None,
             edge_http_auth_value: None,
+            pull_url: None,
+            pull_interval: 60,
+            pull_items_path: None,
+            pull_headers: Vec::new(),
+            pull_cursor_path: None,
+            pull_cursor_param: None,
+            pull_oauth_url: None,
+            pull_oauth_client_id: None,
+            pull_oauth_scope: None,
+            pull_oauth_secret: None,
         }
     }
 
